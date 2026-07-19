@@ -1,0 +1,59 @@
+# .easignore — used by EAS Build INSTEAD of .gitignore.
+#
+# Why this file exists: package-lock.json is gitignored at the repo root, so it
+# never reaches EAS, and EAS falls back to yarn -> `yarn install --frozen-lockfile`
+# fails. .easignore overrides .gitignore for the EAS upload, so the lockfile is
+# uploaded (it is intentionally NOT listed below) and EAS detects npm.
+#
+# IMPORTANT: this file fully replaces .gitignore for EAS, so every heavy/secret
+# path must be re-listed here. Do NOT add package-lock.json.
+
+# VCS
+.git
+
+# Dependencies (node_modules is ~8.5GB — never upload it)
+node_modules
+.pnp
+.pnp.js
+
+# Env / secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.envrc.local
+
+# Turbo / Vercel / Next / build outputs
+.turbo
+.vercel
+.next/
+out/
+build
+dist
+coverage
+
+# Expo / Metro / RN caches
+.expo
+__generated__
+web-build
+bare-apps
+.metro-health-check*
+tsconfig.tsbuildinfo
+
+# Locally generated native dirs (EAS runs prebuild itself)
+apps/oscode-rn/android/
+apps/oscode-rn/ios/
+
+# Logs / OS / editor cruft
+npm-debug.log*
+yarn-error.log
+.DS_Store
+*.pem
+*.apk
+*.hprof
+.history/
+.vscode
+
+# graphify (not needed for the build)
+graphify-out

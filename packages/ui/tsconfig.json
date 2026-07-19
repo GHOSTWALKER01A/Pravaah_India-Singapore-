@@ -1,0 +1,10 @@
+{
+  "extends": "@pravaah/typescript-config/react-library.json",
+  "compilerOptions": {
+    "paths": {
+      "@pravaah/ui/*": ["./src/*"]
+    }
+  },
+  "include": ["."],
+  "exclude": ["node_modules", "dist"]
+}

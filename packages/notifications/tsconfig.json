@@ -1,0 +1,17 @@
+{
+  "extends": "@pravaah/typescript-config/base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "rootDir": "./src",
+    "paths": {
+      "@pravaah/notifications/*": [
+        "./src/*"
+      ]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

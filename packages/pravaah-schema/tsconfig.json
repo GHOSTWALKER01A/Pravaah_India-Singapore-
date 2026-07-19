@@ -1,0 +1,16 @@
+{
+  "extends": "@pravaah/typescript-config/base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "module": "Preserve",
+    "moduleResolution": "bundler",
+    "paths": {
+      "@pravaah/schema/*": ["./src/*"],
+      "@/*": ["./src/*"]
+    },
+    "types": ["node"]
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "dist"]
+}

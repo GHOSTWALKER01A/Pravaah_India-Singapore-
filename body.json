@@ -1,0 +1,7 @@
+{
+  "reference_id":"cin-test-001",
+  "document_type":"CIN",
+  "id_number":"U74900TN2015PTC100000",
+  "consent":"Y",
+  "consent_purpose":"Testing CIN Verification"
+}

@@ -1,0 +1,26 @@
+{
+  "name": "@pravaah/notifications",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "types": "./dist/index.d.cts",
+  "description": "Framework-agnostic multi-channel notification library (email, SMS, push, WhatsApp)",
+  "exports": {
+    ".": "./dist/index.cjs"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "lint": "eslint . --max-warnings 0",
+    "check-types": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@pravaah/eslint-config": "*",
+    "@pravaah/typescript-config": "*",
+    "@types/node": "^25.6.0",
+    "eslint": "^10.7.0",
+    "tsdown": "^0.21.7",
+    "typescript": "^6.0.3"
+  }
+}

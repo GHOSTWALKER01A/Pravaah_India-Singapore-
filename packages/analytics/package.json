@@ -1,0 +1,52 @@
+{
+  "name": "@pravaah/analytics",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "types": "./dist/index.d.cts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.cts",
+      "default": "./dist/index.cjs"
+    },
+    "./core": {
+      "types": "./dist/core/index.d.cts",
+      "default": "./dist/core/index.cjs"
+    },
+    "./catalog": {
+      "types": "./dist/catalog/index.d.cts",
+      "default": "./dist/catalog/index.cjs"
+    },
+    "./types": {
+      "types": "./dist/types.d.cts",
+      "default": "./dist/types.cjs"
+    },
+    "./adapters/posthog-web": {
+      "types": "./dist/adapters/posthog-web/index.d.cts",
+      "default": "./dist/adapters/posthog-web/index.cjs"
+    },
+    "./adapters/posthog-rn": {
+      "types": "./dist/adapters/posthog-rn/index.d.cts",
+      "default": "./dist/adapters/posthog-rn/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "check-types": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "prepare": "npm run build"
+  },
+  "devDependencies": {
+    "@pravaah/eslint-config": "*",
+    "@pravaah/typescript-config": "*",
+    "eslint": "^10.7.0",
+    "tsdown": "^0.21.7",
+    "typescript": "^6.0.3"
+  }
+}
