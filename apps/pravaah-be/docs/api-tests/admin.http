@@ -1,0 +1,135 @@
+########################################################################
+# PRAVAAH · Admin console — login (phone/email OTP) + KYC review
+#
+# VS Code "REST Client" / JetBrains HTTP client.  Base = /api/v1/...
+#
+# Admins are PRE-PROVISIONED in the AdminUser table (never auto-created).
+# Seed them first:   npm run prisma:seed
+#   • admin@pravaah.in     / +919000000001  (ADMIN)
+#   • reviewer@pravaah.in  / +919000000002  (REVIEWER)
+#
+# Login mirrors user auth (Supabase OTP → delivered via MSG91/nodemailer),
+# but is gated on an active AdminUser and returns the reviewer profile.
+#
+# NOTE: the seeded phones are placeholders — to actually receive an SMS OTP,
+# set a real admin phone (edit the seed) or use a Supabase test OTP number.
+# Email login works against a real inbox once SMTP + the email hook are set.
+########################################################################
+
+@baseUrl = http://localhost:8000/api/v1
+@contentType = application/json
+
+# ── admin identity under test (matches the seed) ────────────────────────
+@adminPhone = 9000000001
+@adminCountryCode = 91
+@adminEmail = admin@pravaah.in
+
+
+########################################################################
+# 1 · Admin login
+########################################################################
+
+### 1a · Send OTP (phone).  403 if the number isn't an active admin.
+# @name adminSendOtp
+POST {{baseUrl}}/admin/auth/send-otp
+Content-Type: {{contentType}}
+
+{
+  "phone": "{{adminPhone}}",
+  "countryCode": "{{adminCountryCode}}"
+}
+
+### 1b · (alt) Send OTP by email
+POST {{baseUrl}}/admin/auth/send-otp
+Content-Type: {{contentType}}
+
+{
+  "email": "{{adminEmail}}"
+}
+
+### 1c · Resend OTP
+POST {{baseUrl}}/admin/auth/resend-otp
+Content-Type: {{contentType}}
+
+{
+  "phone": "{{adminPhone}}",
+  "countryCode": "{{adminCountryCode}}"
+}
+
+### 1d · Verify OTP -> 200 { admin: {id,email,phone,role,isActive}, accessToken, refreshToken }
+# @name adminVerify
+POST {{baseUrl}}/admin/auth/verify
+Content-Type: {{contentType}}
+
+{
+  "phone": "{{adminPhone}}",
+  "countryCode": "{{adminCountryCode}}",
+  "otp": "123456"
+}
+
+### 1e · Capture the admin token from the verify response
+@adminToken = {{adminVerify.response.body.data.accessToken}}
+@adminRefresh = {{adminVerify.response.body.data.refreshToken}}
+
+### 1f · Who am I (guarded) -> current admin profile
+GET {{baseUrl}}/admin/auth/me
+Authorization: Bearer {{adminToken}}
+
+### 1g · Refresh admin session
+POST {{baseUrl}}/admin/auth/refresh
+Content-Type: {{contentType}}
+
+{
+  "refreshToken": "{{adminRefresh}}"
+}
+
+
+########################################################################
+# 2 · KYC review console  (all require the admin token)
+########################################################################
+
+### 2a · Review queue (OPEN cases). The seed creates one IN_REVIEW case.
+# @name adminCases
+GET {{baseUrl}}/admin/kyc/cases?status=OPEN
+Authorization: Bearer {{adminToken}}
+
+### 2b · Case detail (id auto-pulled from the first queued case)
+GET {{baseUrl}}/admin/kyc/cases/{{adminCases.response.body.data.0.id}}
+Authorization: Bearer {{adminToken}}
+
+### 2c · Claim the case (claim-lock: a second claim -> 409)
+POST {{baseUrl}}/admin/kyc/cases/{{adminCases.response.body.data.0.id}}/claim
+Authorization: Bearer {{adminToken}}
+
+### 2d · Decide — APPROVED | REJECTED | INFO_REQUESTED (notes mandatory 3–500 chars)
+#        Sanctions-flagged cases require a SENIOR_REVIEWER/ADMIN.
+POST {{baseUrl}}/admin/kyc/cases/{{adminCases.response.body.data.0.id}}/decision
+Content-Type: {{contentType}}
+Authorization: Bearer {{adminToken}}
+
+{
+  "decision": "APPROVED",
+  "notes": "Documents consistent; name mismatch is a transliteration variant."
+}
+
+
+########################################################################
+# 3 · Negative checks
+########################################################################
+
+### 3a · Non-admin number -> 403
+POST {{baseUrl}}/admin/auth/send-otp
+Content-Type: {{contentType}}
+
+{
+  "phone": "9111111111",
+  "countryCode": "91"
+}
+
+### 3b · No token on a guarded route -> 401
+GET {{baseUrl}}/admin/kyc/cases
+
+### 3c · A normal user's token on admin route -> 403
+#        (paste a user accessToken from auth.http)
+GET {{baseUrl}}/admin/kyc/cases
+Authorization: Bearer PASTE_A_NON_ADMIN_USER_TOKEN

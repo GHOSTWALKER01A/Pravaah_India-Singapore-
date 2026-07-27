@@ -1,13 +1,622 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  runtime      = "nodejs"
+  moduleFormat = "cjs"
 }
 
 datasource db {
   provider = "postgresql"
+}
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+enum Country {
+  INDIA
+  SINGAPORE
+  BOTH
+}
+
+enum KycStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  IN_REVIEW
+  ACTION_REQUIRED
+  VERIFIED
+  REJECTED
+}
+
+enum CheckType {
+  PAN
+  AADHAAR_OKYC
+  BANK_PENNY_DROP
+  FACE_MATCH
+  LIVENESS
+  SINGPASS_MYINFO
+  SANCTIONS_PEP
+}
+
+enum CheckStatus {
+  PENDING
+  PASSED
+  FAILED
+  MANUAL_REVIEW
+  EXPIRED
+}
+
+enum DocType {
+  PAN_CARD
+  AADHAAR
+  PASSPORT
+  NRIC_FIN
+  DRIVING_LICENCE
+  SELFIE
+}
+
+enum DocStatus {
+  UPLOADED
+  OCR_DONE
+  VERIFIED
+  REJECTED
+}
+
+enum DeviceStatus {
+  ACTIVE
+  REVOKED
+  SUSPECTED_SWAP
+}
+
+enum ReviewStatus {
+  OPEN
+  CLAIMED
+  RESOLVED
+}
+
+enum ReviewDecision {
+  APPROVED
+  REJECTED
+  INFO_REQUESTED
+}
+
+enum AdminRole {
+  REVIEWER
+  SENIOR_REVIEWER
+  ADMIN
+}
+
+enum ActorType {
+  USER
+  ADMIN
+  SYSTEM
+}
+
+enum ConsentStatus {
+  PENDING
+  ACTIVE
+  PAUSED
+  REJECTED
+  REVOKED
+  EXPIRED
+  FAILED
+}
+
+enum ConsentMode {
+  VIEW
+  STORE
+  QUERY
+  STREAM
+}
+
+enum FetchType {
+  ONETIME
+  PERIODIC
+}
+
+enum FiType {
+  DEPOSIT
+  TERM_DEPOSIT
+  RECURRING_DEPOSIT
+  MUTUAL_FUNDS
+  EQUITIES
+  GSTR
+}
+
+enum DataSessionStatus {
+  PENDING
+  PARTIAL
+  COMPLETED
+  FAILED
+  EXPIRED
+}
+
+enum FiDataStatus {
+  ENCRYPTED
+  DECRYPTED
+  NORMALIZED
+  DELETED
+}
+
+// ── M2: Reputation Engine (scoring) ──
+enum ScoreStatus {
+  PENDING
+  COMPUTED
+  EXPIRED
+  FAILED
+  INSUFFICIENT_DATA
+  OVERRIDDEN
+}
+
+enum ScoreBand {
+  POOR
+  FAIR
+  GOOD
+  VERY_GOOD
+  EXCELLENT
+}
+
+enum FactorDirection {
+  POSITIVE
+  NEGATIVE
+}
+
+// ============================================================================
+// MODELS
+// ============================================================================
+model User {
+  id             String    @id @default(uuid()) @db.Uuid
+  // username    String    @map("name")
+  // The user's permanent PUBLIC identity — `PVH-XXXX-XXXX-XXXX`. This, never
+  // `id`, is what the app, the console and partners display. Nullable ONLY so
+  // the column can be added to a populated table; PravaahIdService mints one on
+  // first sight of any row missing it, so the API layer treats it as required.
+  // See packages/pravaah-schema/src/common/pravaah-id.ts for the format.
+  pravaahId      String?   @unique @map("pravaah_id") @db.VarChar(24)
+  // A user authenticates with phone OR email, so both are optional+unique.
+  phone          String?   @unique @map("phone")
+  email          String?   @unique @map("email")
+  primaryCountry Country   @default(INDIA)
+  kycStatus      KycStatus @default(NOT_STARTED)
+  isSuspended    Boolean   @default(false)
+  // Expo push token for mobile notifications (ExponentPushToken[...]).
+  expoPushToken  String?   @map("expo_push_token")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  kycProfile KycProfile?
+  devices    Device[]
+  documents  IdentityDocument[]
+  consents   ConsentRecord[]
+
+  // ── M1: Consent & Data Aggregation (Account Aggregator) ──
+  aaConsents   Consent[]
+  fiNormalized FiNormalized[]
+
+  // ── M2: Reputation Engine (scoring) ──
+  scores             Score[]
+  protectedAttribute ProtectedAttribute?
+
+  @@index([kycStatus])
+}
+
+model Device {
+  id               String       @id @default(uuid()) @db.Uuid
+  userId           String       @map("user_id") @db.Uuid
+  deviceId         String       @map("device_id") @db.Uuid // hashed hardware id
+  platform         String       @map("platform")
+  bindingTokenHash String       @map("token_hash")
+  simSerialHash    String?      @map("sim_serial_hash") // for swap detection
+  status           DeviceStatus @default(ACTIVE)
+  lastSeenAt       DateTime     @default(now()) @map("last_seen_at") @db.Timestamptz()
+  createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, deviceId])
+}
+
+model KycProfile {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @unique @map("user_id") @db.Uuid
+  overallStatus  KycStatus @default(IN_PROGRESS)
+  nameMatchScore Float?    @map("name_match_score")
+  riskScore      Float?    @map("risk_score")
+  verifiedName   String?   @map("verified_name")
+  startedAt      DateTime  @default(now()) @map("started_at") @db.Timestamptz()
+  completedAt    DateTime? @map("completed_at") @db.Timestamptz()
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  checks     KycCheck[]
+  reviewCase ReviewCase?
+}
+
+model KycCheck {
+  id            String      @id @default(uuid()) @db.Uuid
+  kycProfileId  String      @map("kyc_profile_id") @db.Uuid
+  provider      String      @map("provider")
+  checkType     CheckType
+  status        CheckStatus @default(PENDING)
+  providerRefId String?     @map("provider_ref_id") // idempotency + trace (provider-namespaced, e.g. "pan_<uuid>" or a Decentro txn id — NOT a uuid)
+  confidence    Float?      @map("confidence")
+  extractedName String?     @map("extracted_name")
+  maskedResult  Json?       @map("masked_result") @db.Json
+  encryptedBlob String?     @map("encrypted_blob") // field-encrypted raw response
+  attempt       Int         @default(1)
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt     DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  kycProfile KycProfile @relation(fields: [kycProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([kycProfileId, checkType, attempt])
+  @@index([status])
+}
+
+model IdentityDocument {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  docType      DocType
+  storagePath  String
+  ocrJson      Json?     @map("ocr_json") @db.Json
+  maskedNumber String?
+  status       DocStatus @default(UPLOADED)
+  uploadedAt   DateTime  @default(now()) @map("uploaded_at") @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model ConsentRecord {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  policyVersion String   @map("policy_version")
+  purpose       String
+  acceptedAt    DateTime @default(now()) @map("accept_at") @db.Timestamptz()
+  ipAddress     String   @map("ip_address")
+  userAgent     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model ReviewCase {
+  id              String          @id @default(uuid()) @db.Uuid
+  kycProfileId    String          @unique @map("kyc_profile_id") @db.Uuid
+  status          ReviewStatus    @default(OPEN)
+  reason          String
+  assignedAdminId String?         @map("assigned_admin_id") @db.Uuid
+  decision        ReviewDecision?
+  decisionNotes   String?
+  slaDueAt        DateTime?       @map("sla_due_at") @db.Timestamptz()
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt       DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+  resolvedAt      DateTime?       @map("resolved_at") @db.Timestamptz()
+
+  assignedAdmin AdminUser? @relation(fields: [assignedAdminId], references: [id], onDelete: SetNull)
+  kycProfile    KycProfile @relation(fields: [kycProfileId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([assignedAdminId])
+}
+
+model AdminUser {
+  id       String    @id @default(uuid()) @db.Uuid
+  email    String    @unique @map("email")
+  phone    String?   @unique @map("phone")
+  role     AdminRole @default(REVIEWER)
+  isActive Boolean   @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  reviews        ReviewCase[]
+  scoreOverrides ScoreOverride[]
+}
+
+// Replay protection for provider webhooks (unique per provider event id)
+model WebhookEvent {
+  id         String   @id @default(uuid()) @db.Uuid
+  eventId    String   @map("event_id")
+  provider   String
+  receivedAt DateTime @default(now()) @map("received_at") @db.Timestamptz()
+
+  @@unique([provider, eventId])
+}
+
+// ── consent artefact + its lifecycle ──
+model Consent {
+  id                String  @id @default(uuid()) @db.Uuid
+  userId            String  @map("user_id") @db.Uuid
+  aaProvider        String  @map("aa_provider") // "setu" | "sandbox" | "finvu"
+  providerConsentId String? @unique @map("provider_consent_id") // AA-side consent id
+  consentHandle     String? @map("consent_handle") // AA handle (pre-approval)
+  vua               String // mobile@aahandle
+
+  purpose        String
+  purposeCode    String      @map("purpose_code") // AA purpose code, e.g. "101"
+  consentMode    ConsentMode @default(STORE) @map("consent_mode")
+  fetchType      FetchType   @default(ONETIME) @map("fetch_type")
+  frequencyUnit  String?     @map("frequency_unit") // DAY | MONTH (periodic)
+  frequencyValue Int?        @map("frequency_value")
+  fiTypes        FiType[]    @map("fi_types")
+
+  dataRangeFrom DateTime @map("data_range_from") @db.Timestamptz()
+  dataRangeTo   DateTime @map("data_range_to") @db.Timestamptz()
+  dataLifeUnit  String   @map("data_life_unit") // MONTH | YEAR | INF
+  dataLifeValue Int      @map("data_life_value")
+  consentExpiry DateTime @map("consent_expiry") @db.Timestamptz() // approval deadline / validity
+
+  status           ConsentStatus @default(PENDING)
+  redirectUrl      String?       @map("redirect_url") // AA approval url
+  signedArtefact   String?       @map("signed_artefact") // field-encrypted JWS
+  artefactVerified Boolean       @default(false) @map("artefact_verified")
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+  activatedAt DateTime? @map("activated_at") @db.Timestamptz()
+  revokedAt   DateTime? @map("revoked_at") @db.Timestamptz()
+  expiresAt   DateTime? @map("expires_at") @db.Timestamptz() // effective data-retention expiry
+
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions   DataSession[]
+  normalized FiNormalized[]
+
+  @@index([userId, status])
+}
+
+// ── one data session per fetch ──
+model DataSession {
+  id                String            @id @default(uuid()) @db.Uuid
+  consentId         String            @map("consent_id") @db.Uuid
+  providerSessionId String?           @unique @map("provider_session_id")
+  status            DataSessionStatus @default(PENDING)
+  format            String            @default("json") // json | xml
+  dataRangeFrom     DateTime          @map("data_range_from") @db.Timestamptz()
+  dataRangeTo       DateTime          @map("data_range_to") @db.Timestamptz()
+  fipTotal          Int?              @map("fip_total") // FIPs expected
+  fipCompleted      Int               @default(0) @map("fip_completed") // FIPs fetched (partial tracking)
+  keyMaterial       String?           @map("key_material") // our ephemeral private key (field-encrypted)
+  requestedAt       DateTime          @default(now()) @map("requested_at") @db.Timestamptz()
+  completedAt       DateTime?         @map("completed_at") @db.Timestamptz()
+
+  consent Consent  @relation(fields: [consentId], references: [id], onDelete: Cascade)
+  fiData  FiData[]
+
+  @@index([status])
+}
+
+// ── raw per-FIP FI data (encrypted at rest, deleted on data-life) ──
+model FiData {
+  id                String       @id @default(uuid()) @db.Uuid
+  dataSessionId     String       @map("data_session_id") @db.Uuid
+  fipId             String       @map("fip_id")
+  fiType            FiType       @map("fi_type")
+  status            FiDataStatus @default(ENCRYPTED)
+  encryptedBlob     String       @map("encrypted_blob") // decrypted-then-field-encrypted payload
+  dataLifeExpiresAt DateTime     @map("data_life_expires_at") @db.Timestamptz() // hard-delete deadline
+  fetchedAt         DateTime     @default(now()) @map("fetched_at") @db.Timestamptz()
+  deletedAt         DateTime?    @map("deleted_at") @db.Timestamptz()
+
+  dataSession DataSession @relation(fields: [dataSessionId], references: [id], onDelete: Cascade)
+
+  @@index([status, dataLifeExpiresAt])
+}
+
+// ── normalised financial features (input to M2 scoring) ──
+model FiNormalized {
+  id                String   @id @default(uuid()) @db.Uuid
+  userId            String   @map("user_id") @db.Uuid
+  consentId         String   @map("consent_id") @db.Uuid
+  fiType            FiType   @map("fi_type")
+  normalizedJson    String   @map("normalized_json") // field-encrypted normalised features
+  coverageScore     Float?   @map("coverage_score") // 0..1 how complete the data is
+  computedAt        DateTime @default(now()) @map("computed_at") @db.Timestamptz()
+  dataLifeExpiresAt DateTime @map("data_life_expires_at") @db.Timestamptz()
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  consent Consent @relation(fields: [consentId], references: [id], onDelete: Cascade)
+
+  // One normalised row per (user, consent, fiType) — enables idempotent upsert.
+  @@unique([userId, consentId, fiType])
+  @@index([userId])
+}
+
+// ============================================================================
+// M2 — REPUTATION ENGINE (scoring)
+// ============================================================================
+
+// ── model registry: every score is stamped with the version that produced it ──
+model ModelVersion {
+  id      String @id @default(uuid()) @db.Uuid
+  name    String // "pravaah-credit"
+  version String @unique // "1.0.3"
+
+  // Ordered feature names + dtypes. THE contract between the assembler and the
+  // runtime — a score is only reproducible if this order is fixed.
+  featureSchema Json   @map("feature_schema") @db.Json
+  // Band cutoffs: [{ min, max, band }] — they travel with the M3 credential so
+  // a foreign lender can interpret the number.
+  bands         Json   @db.Json
+  // Which runtime serves this version: "scorecard" (in-process, additive, exact
+  // Shapley) | "fastapi" (external XGBoost + SHAP). Activating a "fastapi"
+  // version when ML_BASE_URL is down is a visible, auditable choice.
+  runtime       String @default("scorecard")
+  // Parameters for the in-process scorecard runtime (weights, transforms,
+  // references, calibration). Null for externally-hosted models.
+  scorecard     Json?  @db.Json
+
+  trainedAt      DateTime  @map("trained_at") @db.Timestamptz()
+  datasetRef     String?   @map("dataset_ref") // provenance
+  notes          String? // release note / what changed
+  fairnessPassed Boolean   @default(false) @map("fairness_passed")
+  fairnessAt     DateTime? @map("fairness_at") @db.Timestamptz()
+  isActive       Boolean   @default(false) @map("is_active") // only ONE at a time
+  activatedAt    DateTime? @map("activated_at") @db.Timestamptz()
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  scores          Score[]
+  fairnessReports FairnessReport[]
+
+  @@index([isActive])
+}
+
+// ── the score itself: value + provenance, never raw financial data ──
+model Score {
+  id             String @id @default(uuid()) @db.Uuid
+  userId         String @map("user_id") @db.Uuid
+  // Provenance: exactly which consent's data produced this number.
+  consentId      String @map("consent_id") @db.Uuid
+  modelVersionId String @map("model_version_id") @db.Uuid
+
+  value      Int? // 300..900 (null while PENDING / INSUFFICIENT_DATA)
+  band       ScoreBand?
+  confidence Float? // 0..1 — honest uncertainty, not decoration
+  // Confidence band around `value`, widened by thin/partial data.
+  bandLow    Int?       @map("band_low")
+  bandHigh   Int?       @map("band_high")
+
+  coverageScore Float? @map("coverage_score") // from M1 (data completeness)
+  // sha256 of the ordered feature vector — the cache key AND the
+  // reproducibility receipt (same hash + version ⇒ same score, always).
+  inputsHash    String @map("inputs_hash")
+  // Count of features that had to be neutrally imputed (drives confidence).
+  missingCount  Int    @default(0) @map("missing_count")
+
+  status        ScoreStatus @default(PENDING)
+  failureReason String?     @map("failure_reason")
+  // Which runtime actually produced it (may differ from the registry default
+  // if a fallback served the request) — audit needs the truth, not the intent.
+  servedBy      String?     @map("served_by")
+
+  computedAt        DateTime? @map("computed_at") @db.Timestamptz()
+  expiresAt         DateTime? @map("expires_at") @db.Timestamptz() // tied to consent data-life
+  dataLifeExpiresAt DateTime? @map("data_life_expires_at") @db.Timestamptz()
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt         DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  modelVersion ModelVersion @relation(fields: [modelVersionId], references: [id])
+
+  factors      ScoreFactor[]
+  improvements ScoreImprovement[]
+  overrides    ScoreOverride[]
+
+  // Idempotent caching + concurrency safety: two simultaneous computes on the
+  // same inputs collapse onto one row instead of racing.
+  @@unique([userId, modelVersionId, inputsHash])
+  @@index([userId, status])
+  @@index([modelVersionId, status])
+  @@index([status, expiresAt])
+}
+
+// ── explainability: the "why", derived from the SAME prediction call ──
+model ScoreFactor {
+  id        String          @id @default(uuid()) @db.Uuid
+  scoreId   String          @map("score_id") @db.Uuid
+  feature   String // "income_regularity"
+  shapValue Float           @map("shap_value") // signed contribution (margin space)
+  direction FactorDirection
+  plainText String          @map("plain_text") // human sentence, DPDP-grade
+  rank      Int // 1 = biggest driver
+
+  score Score @relation(fields: [scoreId], references: [id], onDelete: Cascade)
+
+  @@unique([scoreId, feature])
+  @@index([scoreId, rank])
+}
+
+// ── counterfactuals: the "how to improve", with a recomputed point gain ──
+model ScoreImprovement {
+  id            String @id @default(uuid()) @db.Uuid
+  scoreId       String @map("score_id") @db.Uuid
+  feature       String
+  currentValue  Float  @map("current_value")
+  targetValue   Float  @map("target_value")
+  // Points gained by re-running inference with `feature := targetValue`.
+  // A real counterfactual delta, not a heuristic multiple of the SHAP value.
+  estimatedGain Int    @map("estimated_gain")
+  plainText     String @map("plain_text")
+  rank          Int    @default(1)
+
+  score Score @relation(fields: [scoreId], references: [id], onDelete: Cascade)
+
+  @@unique([scoreId, feature])
+}
+
+// ── fairness: outcomes tested across groups; a deploy blocker, not a report ──
+model FairnessReport {
+  id             String   @id @default(uuid()) @db.Uuid
+  modelVersionId String   @map("model_version_id") @db.Uuid
+  metric         String // disparate_impact | demographic_parity | equal_opportunity
+  attribute      String // "gender" | "age_band" | "nationality"
+  group          String // "gender:female", "age_band:18-25", "nationality:IN"
+  value          Float
+  threshold      Float // the bar this metric had to clear
+  passed         Boolean
+  sampleSize     Int      @default(0) @map("sample_size")
+  approvalRate   Float?   @map("approval_rate")
+  // Pooled two-proportion z against the comparison group, and whether the gap is
+  // significant at alpha=0.05. A metric fails only when the disparity is BOTH
+  // materially large AND statistically real — the four-fifths rule on its own
+  // blocks deploys on sampling noise at small group sizes.
+  zScore         Float?   @map("z_score")
+  significant    Boolean  @default(false)
+  computedAt     DateTime @default(now()) @map("computed_at") @db.Timestamptz()
+
+  modelVersion ModelVersion @relation(fields: [modelVersionId], references: [id], onDelete: Cascade)
+
+  @@index([modelVersionId])
+  @@index([modelVersionId, passed])
+}
+
+// ── protected attributes: AUDIT ONLY, never a model feature ──
+// Separately consented, encrypted at rest, and read by exactly one caller
+// (FairnessService). They exist so we can PROVE the model is equitable.
+model ProtectedAttribute {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @unique @map("user_id") @db.Uuid
+  gender       String? // field-encrypted
+  ageBand      String?   @map("age_band") // field-encrypted
+  nationality  String? // field-encrypted
+  consentGiven Boolean   @default(false) @map("consent_given")
+  consentedAt  DateTime? @map("consented_at") @db.Timestamptz()
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([consentGiven])
+}
+
+// ── admin override: senior-only, mandatory reason, permanently attributed ──
+model ScoreOverride {
+  id           String    @id @default(uuid()) @db.Uuid
+  scoreId      String    @map("score_id") @db.Uuid
+  adminId      String    @map("admin_id") @db.Uuid
+  previousBand ScoreBand @map("previous_band")
+  newBand      ScoreBand @map("new_band")
+  reason       String
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  score Score     @relation(fields: [scoreId], references: [id], onDelete: Cascade)
+  admin AdminUser @relation(fields: [adminId], references: [id])
+
+  @@index([scoreId])
+  @@index([adminId])
+}
+
+// Append-only audit trail (no updates/deletes at the application layer)
+model AuditLog {
+  id        String    @id @default(uuid()) @db.Uuid
+  actorId   String?   @map("actor_id") @db.Uuid
+  actorType ActorType
+  action    String
+  entityId  String?   @map("entity_id") @db.Uuid
+  entity    String
+  metadata  Json?     @map("meta_data") @db.Json
+  ipAddress String?
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  @@index([entity, entityId])
+  @@index([createdAt])
 }

@@ -1,0 +1,11 @@
+# Trained artefacts are build output, not source. They are reproducible from
+# `python -m app.train` (fixed seed), and a committed .joblib would be an
+# unreviewable binary that silently outranks the code.
+models/
+*.joblib
+
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/

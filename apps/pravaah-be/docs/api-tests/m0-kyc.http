@@ -1,0 +1,294 @@
+########################################################################
+# PRAVAAH · M0 — Identity & Onboarding (KYC) — API test book
+#
+# Works with the VS Code "REST Client" extension and JetBrains HTTP client.
+# Send a request by clicking "Send Request" above each `###` block.
+#
+# Base = global prefix `api` + URI version `v1`  ->  /api/v1/...
+# Port defaults to 8000 (main.ts: process.env.PORT ?? 8000).
+#
+# AUTH: every /kyc/* and /admin/kyc/* route is guarded by the Supabase JWT.
+#   1. Get a user access token from Supabase (phone OTP verify) and paste it
+#      into @accessToken below.
+#   2. Admin routes need a token whose role claim is ADMIN -> @adminToken.
+#   (This backend is M0 only; it has no login endpoint — tokens come from
+#    Supabase Auth directly.)
+#
+# Named requests (`# @name x`) let later requests reuse values automatically,
+# e.g. providerRefId / sessionId / caseId — run them in order.
+########################################################################
+
+@baseUrl = http://localhost:8000/api/v1
+@contentType = application/json
+
+# ── paste your tokens here ─────────────────────────────────────────────
+@accessToken = PASTE_SUPABASE_USER_JWT
+@adminToken  = PASTE_SUPABASE_ADMIN_JWT
+
+
+########################################################################
+# 0 · Health
+########################################################################
+
+###
+GET {{baseUrl}}
+
+
+########################################################################
+# 1 · Start KYC  (creates the User + KycProfile for a country)
+#     country: INDIA | SINGAPORE | BOTH
+########################################################################
+
+# @name startKyc
+POST {{baseUrl}}/kyc/start
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "country": "INDIA"
+}
+
+###
+# Source of truth for the app — current status + the exact next step.
+GET {{baseUrl}}/kyc/status
+Authorization: Bearer {{accessToken}}
+
+
+########################################################################
+# 2 · India rail — PAN  (Decentro, LIVE)
+#     PAN format: AAAAA9999A
+########################################################################
+
+# @name verifyPan
+POST {{baseUrl}}/kyc/pan/verify
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "pan": "ABCPK1234K"
+}
+
+
+########################################################################
+# 3 · India rail — Aadhaar OKYC (DigiLocker)
+#     initiate -> open authorizationUrl -> complete via callback
+########################################################################
+
+# @name okycInitiate
+POST {{baseUrl}}/kyc/aadhaar/okyc/initiate
+Authorization: Bearer {{accessToken}}
+
+###
+# Completes OKYC. providerRefId is auto-pulled from the initiate response.
+# (Production also completes automatically via the signed webhook in §9.)
+POST {{baseUrl}}/kyc/aadhaar/okyc/callback
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "providerRefId": "{{okycInitiate.response.body.data.providerRefId}}",
+  "status": "COMPLETED"
+}
+
+
+########################################################################
+# 4 · India rail — Bank penny-drop
+#     account: 9–18 digits · ifsc: AAAA0999999
+########################################################################
+
+# @name pennyDrop
+POST {{baseUrl}}/kyc/bank/penny-drop
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "account": "123456789012",
+  "ifsc": "HDFC0001234"
+}
+
+
+########################################################################
+# 5 · Biometrics — liveness + face match
+#     liveness token drives the DEV provider:
+#       contains "spoof"  -> hard FAIL
+#       contains "review" -> low confidence -> MANUAL_REVIEW
+#       otherwise         -> PASS
+########################################################################
+
+# @name livenessSession
+POST {{baseUrl}}/kyc/liveness/session
+Authorization: Bearer {{accessToken}}
+
+###
+# Happy path (sessionId auto-pulled from the session response)
+POST {{baseUrl}}/kyc/liveness/verify
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "sessionId": "{{livenessSession.response.body.data.sessionId}}",
+  "token": "live-ok"
+}
+
+###
+# Spoof path (demonstrates the hard-fail branch)
+POST {{baseUrl}}/kyc/liveness/verify
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "sessionId": "{{livenessSession.response.body.data.sessionId}}",
+  "token": "spoof-photo-of-photo"
+}
+
+###
+# Face match — multipart (files optional; DEV provider ignores content).
+# Point the `< ./file` refs at real images to exercise the upload path.
+POST {{baseUrl}}/kyc/face-match
+Authorization: Bearer {{accessToken}}
+Content-Type: multipart/form-data; boundary=----pravaahBoundary
+
+------pravaahBoundary
+Content-Disposition: form-data; name="selfie"; filename="selfie.jpg"
+Content-Type: image/jpeg
+
+< ./selfie.jpg
+------pravaahBoundary
+Content-Disposition: form-data; name="idPhoto"; filename="id.jpg"
+Content-Type: image/jpeg
+
+< ./id.jpg
+------pravaahBoundary--
+
+
+########################################################################
+# 6 · Sanctions / PEP screen
+#     Omit "name" to screen the reconciled profile name (verifiedName).
+#     Watchlisted demo names (case-insensitive) hard-REJECT the profile.
+########################################################################
+
+###
+# Screen the reconciled profile name
+POST {{baseUrl}}/kyc/sanctions/screen
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{}
+
+###
+# Force a sanctions HIT (seeded demo watchlist name)
+POST {{baseUrl}}/kyc/sanctions/screen
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "name": "Dawood Ibrahim"
+}
+
+
+########################################################################
+# 7 · Singapore rail — Myinfo (PERSONA provider, dev)
+#     initiate -> the authorizationUrl points at the mock consent screen (§8)
+########################################################################
+
+# @name singpassInitiate
+POST {{baseUrl}}/kyc/singpass/initiate
+Authorization: Bearer {{accessToken}}
+
+###
+# Complete after a persona has been selected in §8 (providerRefId auto-pulled)
+POST {{baseUrl}}/kyc/singpass/callback
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "providerRefId": "{{singpassInitiate.response.body.data.providerRefId}}"
+}
+
+
+########################################################################
+# 8 · Mock Singpass consent screen (dev only — NO auth)
+#     GET lists official test personas · POST selects one for the session
+########################################################################
+
+###
+# List personas for the pending session
+GET {{baseUrl}}/kyc/singpass/mock/{{singpassInitiate.response.body.data.providerRefId}}
+
+###
+# Select a persona (binds it to the session, so §7 callback can fetch it)
+POST {{baseUrl}}/kyc/singpass/mock/{{singpassInitiate.response.body.data.providerRefId}}
+Content-Type: {{contentType}}
+
+{
+  "uinfin": "S9812381D"
+}
+
+
+########################################################################
+# 9 · Provider webhook (HMAC-signed, no user auth)
+#     Guard requires:
+#       x-webhook-timestamp : epoch ms, within 5 min of now
+#       x-webhook-signature : hex HMAC-SHA256(WEBHOOK_HMAC_SECRET,
+#                             `${timestamp}.${rawBody}`)
+#     Generate ready-to-paste headers + body:  npm run sign:webhook
+#     (or just use the §3 authenticated callback for OKYC — no signature needed)
+#     Replay-protected: a repeated (provider, eventId) is acked & ignored.
+########################################################################
+
+###
+POST {{baseUrl}}/webhooks/kyc/decentro
+Content-Type: {{contentType}}
+x-webhook-timestamp: 1700000000000
+x-webhook-signature: PUT_COMPUTED_HMAC_HEX_HERE
+
+{
+  "eventId": "evt_demo_001",
+  "type": "DIGILOCKER_COMPLETED",
+  "decentroTxnId": "PASTE_providerRefId_FROM_OKYC_INITIATE"
+}
+
+
+########################################################################
+# 10 · Admin console  (needs an ADMIN-role Supabase JWT)
+#      Review queue -> claim -> decide. Sanctions rejections need SENIOR.
+########################################################################
+
+# @name listCases
+GET {{baseUrl}}/admin/kyc/cases?status=OPEN
+Authorization: Bearer {{adminToken}}
+
+###
+# Case detail (id auto-pulled from the first queued case)
+GET {{baseUrl}}/admin/kyc/cases/{{listCases.response.body.data.0.id}}
+Authorization: Bearer {{adminToken}}
+
+###
+# Claim the case (claim-lock: a second claim returns 409)
+POST {{baseUrl}}/admin/kyc/cases/{{listCases.response.body.data.0.id}}/claim
+Authorization: Bearer {{adminToken}}
+
+###
+# Decide — APPROVED | REJECTED | INFO_REQUESTED (notes are mandatory, 3–500 chars)
+POST {{baseUrl}}/admin/kyc/cases/{{listCases.response.body.data.0.id}}/decision
+Content-Type: {{contentType}}
+Authorization: Bearer {{adminToken}}
+
+{
+  "decision": "APPROVED",
+  "notes": "Verified name mismatch is a transliteration variant; documents consistent."
+}
+
+
+########################################################################
+# Suggested end-to-end demo order (India happy path):
+#   1 start(INDIA) -> 2 pan -> 3 okyc initiate+callback -> 4 penny-drop
+#   -> 5 liveness session+verify(pass) + face-match -> 6 sanctions screen
+#   -> GET /kyc/status  (expect VERIFIED, or IN_REVIEW to exercise §10)
+#
+# Review path: send a mismatching PAN name OR liveness token "review...",
+#   then work the case in §10 and watch /kyc/status flip after the decision.
+#
+# Cross-border: start(SINGAPORE|BOTH) -> §7 initiate -> §8 select persona
+#   -> §7 callback -> /kyc/status.
+########################################################################

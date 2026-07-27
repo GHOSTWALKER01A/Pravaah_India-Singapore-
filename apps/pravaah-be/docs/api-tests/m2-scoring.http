@@ -1,0 +1,583 @@
+########################################################################
+# PRAVAAH · M2 — Reputation Engine (scoring) — API test book
+#
+# Works with the VS Code "REST Client" extension and JetBrains HTTP client.
+# Send a request by clicking "Send Request" above each `###` block.
+#
+# Base = global prefix `api` + URI version `v1`  ->  /api/v1/...
+# Port defaults to 8000 (main.ts: process.env.PORT ?? 8000).
+#
+# ─── INFERENCE RUNTIME (env ML_MODE) ──────────────────────────────────
+#   scorecard (DEFAULT) — in-process additive scorecard. Because the model is
+#                additive, each feature's contribution IS its exact Shapley
+#                value (phi_i = a*w_i*(t_i(x_i) - t_i(ref_i))) and reconciles to
+#                the margin exactly. No Python, no artefact, no network hop.
+#                apps/ml is NOT required. This is what the seed activates.
+#   fastapi    — external XGBoost + TreeSHAP at ML_BASE_URL (apps/ml). Needed
+#                only if you register a version with runtime:"fastapi", e.g. to
+#                capture feature INTERACTIONS an additive model cannot learn.
+#                Behind a circuit breaker: 5 transient failures opens it for 30s
+#                and the orchestrator serves the last cached score.
+#   auto       — falls back to the scorecard when the ML service is unreachable.
+#                The substitution is recorded on Score.servedBy.
+#
+#   Which runtime answers is decided by the MODEL VERSION's own `runtime` field,
+#   not a global switch: the runtime is a property of the model, and the version
+#   that produced a score is stamped on it forever.
+#
+# ─── AUTH ─────────────────────────────────────────────────────────────
+#   /score/*        session JWT of a VERIFIED user (TokenService, post-OTP).
+#                   The seeded VERIFIED India user is ARJUN SHARMA
+#                   (+919876543210) and already has M1 data — log in as that
+#                   number to get a token whose `sub` can actually be scored.
+#   /admin/score/*  ADMIN or SENIOR_REVIEWER admin token. Registering, auditing,
+#                   activating and rolling back a model is ADMIN-only; a
+#                   SENIOR_REVIEWER may read everything and override one band.
+#
+# ─── DEMO ARC ─────────────────────────────────────────────────────────
+#   1  POST /score/compute        -> 779 / VERY_GOOD, confidence 0.75, band 759-799
+#                                    (bank + GST. Bank data alone: 732 / GOOD.)
+#   2  GET  /score                -> the same score + why + how-to-improve
+#   3  (admin) GET  /admin/score/models             -> v0.9.0 / v1.0.0 / v1.1.0
+#   4  (admin) GET  .../models/{v1.0.0}/fairness    -> the bias dashboard
+#   5  (admin) POST .../models/{v1.1.0}/activate    -> 400 BLOCKED (the gate)
+#   6  (admin) POST .../models/{v1.1.0}/audit-fairness then activate -> allowed
+#   7  (admin) POST .../models/{v0.9.0}/activate    -> 400 BLOCKED (failed on
+#                gender: `avg_balance` is a gender proxy)
+#   8  M1 revoke the consent -> GET /score -> EXPIRED (data-life cascade)
+#
+#   Step 5 and 7 are the moments worth rehearsing. 7 is the stronger one: the
+#   audit catches gender bias in a model that never sees a gender.
+########################################################################
+
+@baseUrl = http://localhost:8000/api/v1
+@contentType = application/json
+
+# ── paste your tokens here ─────────────────────────────────────────────
+@accessToken = PASTE_VERIFIED_USER_JWT
+@adminToken  = PASTE_ADMIN_JWT
+
+# ── fill from `GET /admin/score/models` (§10) ─────────────────────────
+@modelIdV1   = PASTE_MODEL_ID_1_0_0
+@modelIdV11  = PASTE_MODEL_ID_1_1_0
+@modelIdV09  = PASTE_MODEL_ID_0_9_0
+# ── fill from `GET /admin/score/scores` (§20) ───────────────────────────
+@scoreId     = PASTE_SCORE_ID
+
+
+########################################################################
+# 1 · USER — compute and read the score
+########################################################################
+
+### 1.1 Compute (or re-compute) my score
+# Guards, in order: VERIFIED identity -> ACTIVE consent -> an active model ->
+# the thin-file gate. Only then is the model touched.
+#
+# Idempotent: identical inputs + identical model + still fresh returns the CACHED
+# score rather than burning an inference call to produce a byte-identical row.
+# Two concurrent computes collapse onto one row via
+# @@unique([userId, modelVersionId, inputsHash]).
+POST {{baseUrl}}/score/compute
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0eXAiOiJhY2Nlc3MiLCJyb2xlIjoidXNlciIsInBob25lIjoiKzkxOTk5ODg4Nzc3NiIsInN1YiI6IjZmYTEwNDYyLWVhZWQtNGQzNy1hZDA4LWZiOGMxYjlkNThiMCIsImlzcyI6InByYXZhYWgiLCJhdWQiOiJwcmF2YWFoLWFwcCIsImlhdCI6MTc4NTAxNDUyNiwiZXhwIjoxNzg1MDU3NzI2fQ.Hr3Rtg7F1A8PYvrUJP-20bMjp0U3C_mNX3hFiwJ8NR8
+Content-Type: {{contentType}}
+
+### 1.2 Current score (never computes — safe to poll while PENDING)
+# Returns EITHER a COMPUTED score OR one honest state, each with a different next
+# step: NO_CONSENT -> M1, INSUFFICIENT_DATA -> link more accounts,
+# EXPIRED -> re-consent, PENDING -> keep polling, FAILED -> scheduler retries.
+GET {{baseUrl}}/score
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0eXAiOiJhY2Nlc3MiLCJyb2xlIjoidXNlciIsInBob25lIjoiKzkxOTk5ODg4Nzc3NiIsInN1YiI6IjZmYTEwNDYyLWVhZWQtNGQzNy1hZDA4LWZiOGMxYjlkNThiMCIsImlzcyI6InByYXZhYWgiLCJhdWQiOiJwcmF2YWFoLWFwcCIsImlhdCI6MTc4NTAxNDUyNiwiZXhwIjoxNzg1MDU3NzI2fQ.Hr3Rtg7F1A8PYvrUJP-20bMjp0U3C_mNX3hFiwJ8NR8
+
+### 1.3 Score history (how the number moved, and under which model version)
+GET {{baseUrl}}/score/history?limit=12
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0eXAiOiJhY2Nlc3MiLCJyb2xlIjoidXNlciIsInBob25lIjoiKzkxOTk5ODg4Nzc3NiIsInN1YiI6IjZmYTEwNDYyLWVhZWQtNGQzNy1hZDA4LWZiOGMxYjlkNThiMCIsImlzcyI6InByYXZhYWgiLCJhdWQiOiJwcmF2YWFoLWFwcCIsImlhdCI6MTc4NTAxNDUyNiwiZXhwIjoxNzg1MDU3NzI2fQ.Hr3Rtg7F1A8PYvrUJP-20bMjp0U3C_mNX3hFiwJ8NR8
+
+
+########################################################################
+# 2 · USER — the separate fairness consent (audit-only attributes)
+#
+# Kept OFF the M1 consent flow deliberately: bundling "share my bank data" with
+# "record my gender" would make neither a real choice. These attributes are
+# stored field-encrypted and read by exactly one caller — the fairness audit.
+# They are NEVER part of a feature vector.
+########################################################################
+
+### 2.1 What do we hold? (which attributes, never their values)
+GET {{baseUrl}}/score/fairness-consent
+Authorization: Bearer {{accessToken}}
+
+### 2.2 Grant fairness consent
+POST {{baseUrl}}/score/fairness-consent
+Authorization: Bearer {{accessToken}}
+Content-Type: {{contentType}}
+
+{
+  "consentGiven": true,
+  "gender": "male",
+  "ageBand": "26-35",
+  "nationality": "IN"
+}
+
+### 2.3 Withdraw it — this DELETES the stored attributes
+# "You may stop using them" and "you may keep them" are different promises.
+# This keeps the stronger one.
+POST {{baseUrl}}/score/fairness-consent
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0eXAiOiJhY2Nlc3MiLCJyb2xlIjoidXNlciIsInBob25lIjoiKzkxOTk5ODg4Nzc3NiIsInN1YiI6IjZmYTEwNDYyLWVhZWQtNGQzNy1hZDA4LWZiOGMxYjlkNThiMCIsImlzcyI6InByYXZhYWgiLCJhdWQiOiJwcmF2YWFoLWFwcCIsImlhdCI6MTc4NTAxNDUyNiwiZXhwIjoxNzg1MDU3NzI2fQ.Hr3Rtg7F1A8PYvrUJP-20bMjp0U3C_mNX3hFiwJ8NR8
+Content-Type: {{contentType}}
+
+{
+  "consentGiven": false
+}
+
+
+########################################################################
+# 10 · ADMIN — model registry
+########################################################################
+
+### 10.1 List every registered version
+# `runtimeAvailable: false` warns BEFORE an admin activates a version whose
+# runtime cannot actually be reached.
+GET {{baseUrl}}/admin/score/models
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0eXAiOiJhY2Nlc3MiLCJyb2xlIjoidXNlciIsInBob25lIjoiKzkxOTk5ODg4Nzc3NiIsInN1YiI6IjZmYTEwNDYyLWVhZWQtNGQzNy1hZDA4LWZiOGMxYjlkNThiMCIsImlzcyI6InByYXZhYWgiLCJhdWQiOiJwcmF2YWFoLWFwcCIsImlhdCI6MTc4NTAxNDUyNiwiZXhwIjoxNzg1MDU3NzI2fQ.Hr3Rtg7F1A8PYvrUJP-20bMjp0U3C_mNX3hFiwJ8NR8
+
+### 10.2 Inspect one version
+# Returns the full parameter set. For the scorecard runtime these ARE the model,
+# and a model-risk reviewer must be able to read the weights that priced someone.
+# `activationBlockedReason` is the same predicate the API enforces — the console
+# greys out its button with this exact string.
+GET {{baseUrl}}/admin/score/models/{{modelIdV1}}
+Authorization: Bearer {{adminToken}}
+
+### 10.3 Register a new version (ADMIN only)
+# Always arrives INACTIVE and UNAUDITED. Versions are IMMUTABLE — re-registering
+# an existing version is a 409, because mutating one would silently rewrite the
+# meaning of every score stamped with it. Publish a new version instead.
+#
+# `python -m app.train` in apps/ml prints a ready-to-paste payload for a
+# fastapi-runtime version.
+POST {{baseUrl}}/admin/score/models
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0eXAiOiJhY2Nlc3MiLCJyb2xlIjoidXNlciIsInBob25lIjoiKzkxOTk5ODg4Nzc3NiIsInN1YiI6IjZmYTEwNDYyLWVhZWQtNGQzNy1hZDA4LWZiOGMxYjlkNThiMCIsImlzcyI6InByYXZhYWgiLCJhdWQiOiJwcmF2YWFoLWFwcCIsImlhdCI6MTc4NTAxNDUyNiwiZXhwIjoxNzg1MDU3NzI2fQ.Hr3Rtg7F1A8PYvrUJP-20bMjp0U3C_mNX3hFiwJ8NR8
+Content-Type: {{contentType}}
+
+{
+  "name": "pravaah-credit",
+  "version": "1.2.0",
+  "runtime": "fastapi",
+  "featureSchema": {
+    "features": [
+      { "name": "monthly_inflow",         "dtype": "float", "optional": false },
+      { "name": "income_regularity",      "dtype": "float", "optional": false },
+      { "name": "avg_balance",            "dtype": "float", "optional": false },
+      { "name": "balance_retention",      "dtype": "float", "optional": false },
+      { "name": "obligation_ratio",       "dtype": "float", "optional": false },
+      { "name": "months_covered",         "dtype": "int",   "optional": false },
+      { "name": "bounce_count",           "dtype": "int",   "optional": false },
+      { "name": "gst_turnover",           "dtype": "float", "optional": true  },
+      { "name": "gst_filing_consistency", "dtype": "float", "optional": true  }
+    ]
+  },
+  "bands": [
+    { "min": 300, "max": 579, "band": "POOR" },
+    { "min": 580, "max": 669, "band": "FAIR" },
+    { "min": 670, "max": 739, "band": "GOOD" },
+    { "min": 740, "max": 799, "band": "VERY_GOOD" },
+    { "min": 800, "max": 900, "band": "EXCELLENT" }
+  ],
+  "trainedAt": "2026-07-25T00:00:00+05:30",
+  "datasetRef": "synthetic-xgboost-50000r-seed20260718",
+  "notes": "Gradient-boosted candidate; captures feature interactions."
+}
+
+
+########################################################################
+# 11 · ADMIN — the fairness gate (the exhibit)
+########################################################################
+
+### 11.1 Read the bias dashboard for the ACTIVE model
+# Reports are split into blockingFailures and monitoredConcerns:
+#   BLOCKING  — gender, nationality. No legitimate business reason exists for
+#               approval rates to differ by these; a gap means the model found a
+#               proxy, and the deploy is refused.
+#   MONITORED — age_band. Creditworthiness genuinely varies with age, and ECOA /
+#               Reg B (12 CFR 1002.6(b)(2)) permits age in an empirically derived
+#               system. Reported in full and designed against (wealth and tenure
+#               features are capped at ~22% of total model weight), but not a hard
+#               block: a gate no model can ever pass gets switched off.
+#
+# Groups below minGroupSize (30) are reported but do NOT decide the gate — a
+# four-fifths ratio off a dozen people is sampling noise, not evidence.
+GET {{baseUrl}}/admin/score/models/{{modelIdV1}}/fairness
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0eXAiOiJhY2Nlc3MiLCJyb2xlIjoidXNlciIsInBob25lIjoiKzkxOTk5ODg4Nzc3NiIsInN1YiI6IjZmYTEwNDYyLWVhZWQtNGQzNy1hZDA4LWZiOGMxYjlkNThiMCIsImlzcyI6InByYXZhYWgiLCJhdWQiOiJwcmF2YWFoLWFwcCIsImlhdCI6MTc4NTAxNDUyNiwiZXhwIjoxNzg1MDU3NzI2fQ.Hr3Rtg7F1A8PYvrUJP-20bMjp0U3C_mNX3hFiwJ8NR8
+
+### 11.2 Run the audit (ADMIN only)
+# Re-scores each consented subject under THIS version rather than reading stored
+# outputs — auditing a candidate against the production version's outputs would
+# measure the wrong model. Writes the per-group report AND sets the gate flag.
+POST {{baseUrl}}/admin/score/models/{{modelIdV11}}/audit-fairness
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0eXAiOiJhY2Nlc3MiLCJyb2xlIjoidXNlciIsInBob25lIjoiKzkxOTk5ODg4Nzc3NiIsInN1YiI6IjZmYTEwNDYyLWVhZWQtNGQzNy1hZDA4LWZiOGMxYjlkNThiMCIsImlzcyI6InByYXZhYWgiLCJhdWQiOiJwcmF2YWFoLWFwcCIsImlhdCI6MTc4NTAxNDUyNiwiZXhwIjoxNzg1MDU3NzI2fQ.Hr3Rtg7F1A8PYvrUJP-20bMjp0U3C_mNX3hFiwJ8NR8
+Content-Type: {{contentType}}
+
+{
+  "positiveBandMin": 670,
+  "sampleSize": 2000
+}
+
+
+########################################################################
+# 12 · ADMIN — activation, and the gate refusing
+########################################################################
+
+### 12.1 THE GATE — activating an UNAUDITED version fails with 400
+# Expect: "Fairness audit not passed — activation blocked."
+# The refusal is itself audited (model.activation_blocked): an attempt to ship an
+# unaudited model is exactly the event a model-risk review wants to see.
+POST {{baseUrl}}/admin/score/models/{{modelIdV11}}/activate
+Authorization: Bearer {{adminToken}}
+
+### 12.2 THE GATE, harder — activating the version that FAILED on gender
+# v0.9.0 weights avg_balance at 2.4 of ~5.9 total. In the seeded cohort women hold
+# materially lower balances at comparable incomes (a real, documented pattern)
+# while their repayment behaviour is at least as good — so avg_balance is a gender
+# PROXY. v0.9.0 launders it and fails the four-fifths rule; the behaviour-weighted
+# v1.0.0 passes. NEITHER MODEL EVER SEES A GENDER.
+#
+# Run `npx tsx scripts/verify-scoring.ts` to see this asserted offline.
+POST {{baseUrl}}/admin/score/models/{{modelIdV09}}/activate
+Authorization: Bearer {{adminToken}}
+
+### 12.3 Activate a version that passed
+# Transactional swap — never a window with zero or two active models. Existing
+# scores are NOT deleted or re-badged: they stay valid under the version that
+# produced them and recompute on the next request. That is what makes the
+# version stamp mean something.
+POST {{baseUrl}}/admin/score/models/{{modelIdV1}}/activate
+Authorization: Bearer {{adminToken}}
+
+### 12.4 Roll back to a previous version
+# Rollback is still an activation, so the gate still applies: "it used to be live"
+# is not evidence that it is fair.
+POST {{baseUrl}}/admin/score/models/{{modelIdV09}}/rollback
+Authorization: Bearer {{adminToken}}
+
+
+########################################################################
+# 20 · ADMIN — issued-score oversight
+########################################################################
+
+### 20.1 Every score the platform has issued
+# INSUFFICIENT_DATA rows are first-class here: an honest refusal is a real
+# outcome M2 is accountable for.
+GET {{baseUrl}}/admin/score/scores?limit=50&offset=0
+Authorization: Bearer {{adminToken}}
+
+### 20.2 Only the overridden ones
+GET {{baseUrl}}/admin/score/scores?status=OVERRIDDEN
+Authorization: Bearer {{adminToken}}
+
+### 20.3 Full audit view of one score
+# Answers: which consented data, which model version, which runtime actually
+# served it, which factors drove it, who touched it.
+#
+# Note what it does NOT return: the feature VALUES. It returns `inputsHash`,
+# which proves the score is reproducible without handing an admin a window into
+# a user's bank statement.
+GET {{baseUrl}}/admin/score/scores/{{scoreId}}
+Authorization: Bearer {{adminToken}}
+
+### 20.4 Append-only audit trail for one score
+GET {{baseUrl}}/admin/score/scores/{{scoreId}}/audit
+Authorization: Bearer {{adminToken}}
+
+### 20.5 Manual band override (SENIOR_REVIEWER or ADMIN)
+# The acting admin comes from the JWT, never the body — a self-declared actor id
+# would make the whole attribution trail worthless.
+#
+# The computed `value` is deliberately left UNTOUCHED: an override is a documented
+# human judgement about the BAND, not a rewrite of what the model said. Keeping
+# both means the audit can always show the gap.
+#
+# A reason under 20 characters is a 400.
+POST {{baseUrl}}/admin/score/scores/{{scoreId}}/override
+Authorization: Bearer {{adminToken}}
+Content-Type: {{contentType}}
+
+{
+  "newBand": "VERY_GOOD",
+  "reason": "Verified employer letter and 24 months of statements from a second bank confirm income stability the AA window understated."
+}
+
+### 20.6 Rejected override — reason too short (expect 400)
+POST {{baseUrl}}/admin/score/scores/{{scoreId}}/override
+Authorization: Bearer {{adminToken}}
+Content-Type: {{contentType}}
+
+{
+  "newBand": "EXCELLENT",
+  "reason": "looks fine"
+}
+
+
+########################################################################
+# 30 · ADMIN — drift
+########################################################################
+
+### 30.1 Score-distribution drift (last 24h vs the 7 days before)
+# The same numbers the hourly cron alerts on — a second, subtly different metric
+# in the console would be worse than none. A shifting distribution under an
+# unchanged model means the incoming population changed, which is when a model
+# quietly stops being the model that was audited.
+GET {{baseUrl}}/admin/score/drift
+Authorization: Bearer {{adminToken}}
+
+
+########################################################################
+# 40 · apps/ml — the inference service directly (INTERNAL ONLY)
+#
+# Reachable only from NestJS in a real deployment. Shown here for debugging.
+#
+# Requires, from apps/ml:
+#   pip install -r requirements.txt
+#   python -m app.train --version 1.2.0
+#   MODEL_VERSION=1.2.0 uvicorn app.main:app --port 8100
+#
+# `model_version` below must match the ARTEFACT's version, not a registry entry —
+# mismatch is a deliberate 409 (§40.4).
+########################################################################
+
+@mlUrl = http://localhost:8100
+@mlVersion = 1.2.0
+
+### 40.1 Health + artefact readiness (reported separately)
+# Does NOT 503 on a missing model: the container is up, and restarting it would
+# not conjure an artefact. `model_loaded` tells the operator which problem it is.
+# Also returns the training metrics baked into the artefact.
+GET {{mlUrl}}/health
+
+### 40.2 Predict
+# Verified response for this body on v1.2.0:
+#   score 813 EXCELLENT · probability 0.777 (isotonic-calibrated)
+#   confidence 0.726 = coverage 0.935 x certainty 0.777 x completeness 1.0
+#   raw_margin +1.498974, and base_value + sum(shap_value) matches it to 2.2e-16
+#
+# `raw_margin` is returned precisely so the SHAP additivity axiom is CHECKABLE.
+# Note it is the PRE-calibration quantity: the score comes from the calibrated
+# probability (0.777) not the raw one (0.817), so the contributions do not sum to
+# the score's logit. Both transforms are monotone, so the contributions still
+# explain the score's ORDERING exactly — sign, magnitude and rank are faithful.
+# The in-process scorecard has no such caveat (residual exactly 0).
+POST {{mlUrl}}/predict
+Content-Type: {{contentType}}
+
+{
+  "features": {
+    "monthly_inflow": 85000,
+    "income_regularity": 0.94,
+    "avg_balance": 300000,
+    "balance_retention": 0.9,
+    "obligation_ratio": 0.624,
+    "months_covered": 12,
+    "bounce_count": 1,
+    "gst_turnover": 4820000,
+    "gst_filing_consistency": 0.958
+  },
+  "coverage": 0.935,
+  "model_version": "{{mlVersion}}"
+}
+
+### 40.2b Predict for a SALARIED file (no GST record)
+# Expect completeness 1.0 and missing_count 0: an absent optional feature is
+# not-applicable, not missing. Verified: 788 VERY_GOOD.
+POST {{mlUrl}}/predict
+Content-Type: {{contentType}}
+
+{
+  "features": {
+    "monthly_inflow": 85000,
+    "income_regularity": 0.94,
+    "avg_balance": 300000,
+    "balance_retention": 0.9,
+    "obligation_ratio": 0.624,
+    "months_covered": 12,
+    "bounce_count": 1,
+    "gst_turnover": null,
+    "gst_filing_consistency": null
+  },
+  "coverage": 0.87,
+  "model_version": "{{mlVersion}}"
+}
+
+### 40.2c Predict for a THIN file — honest confidence collapse
+# Verified: 646 FAIR, missing_count 3 of 7 required, completeness 0.571,
+# confidence 0.128 (vs 0.726 for the complete file above).
+POST {{mlUrl}}/predict
+Content-Type: {{contentType}}
+
+{
+  "features": {
+    "monthly_inflow": 48000,
+    "income_regularity": null,
+    "avg_balance": 8000,
+    "balance_retention": null,
+    "obligation_ratio": null,
+    "months_covered": 2,
+    "bounce_count": 0,
+    "gst_turnover": null,
+    "gst_filing_consistency": null
+  },
+  "coverage": 0.28,
+  "model_version": "{{mlVersion}}"
+}
+
+### 40.3 Counterfactual — where "+30 points" actually comes from
+# Re-runs the model with ONE feature moved. Deriving points from a SHAP value
+# would be a fabrication: SHAP lives in margin space and the score is a
+# non-linear squash of it, so points are not additively decomposable.
+#
+# Verified on the salaried profile (788 baseline):
+#   avg_balance       300000 -> 375000 gives +1 pt
+#   balance_retention 0.9    -> 0.98   gives +5 pts
+# The tiny balance gain is the model being BEHAVIOUR-weighted, not a bug — the same
+# reason a balance-based gender proxy fails to bias it (see §40.5).
+POST {{mlUrl}}/counterfactual
+Content-Type: {{contentType}}
+
+{
+  "features": {
+    "monthly_inflow": 85000,
+    "income_regularity": 0.94,
+    "avg_balance": 300000,
+    "balance_retention": 0.9,
+    "obligation_ratio": 0.624,
+    "months_covered": 12,
+    "bounce_count": 1,
+    "gst_turnover": null,
+    "gst_filing_consistency": null
+  },
+  "coverage": 0.87,
+  "model_version": "{{mlVersion}}",
+  "feature": "balance_retention",
+  "target_value": 0.98
+}
+
+### 40.3b Unknown feature is a 400
+POST {{mlUrl}}/counterfactual
+Content-Type: {{contentType}}
+
+{
+  "features": { "monthly_inflow": 85000, "months_covered": 12 },
+  "coverage": 0.5,
+  "model_version": "{{mlVersion}}",
+  "feature": "not_a_feature",
+  "target_value": 1
+}
+
+### 40.4 Version mismatch is a 409, on purpose
+# NestJS stamps the REQUESTED version onto the Score row. Answering as a version
+# this service is not would make every affected score unreproducible and the
+# audit trail a lie. The Nest side keeps the prior score and does NOT trip its
+# circuit breaker — a config error is not an outage.
+POST {{mlUrl}}/predict
+Content-Type: {{contentType}}
+
+{
+  "features": { "monthly_inflow": 85000, "months_covered": 12 },
+  "coverage": 0.5,
+  "model_version": "9.9.9"
+}
+
+### 40.4b Stale / unknown feature key is REFUSED, not silently scored
+# Sending the old `total_inflow` name used to return 807 instead of 813 with
+# `missing_count: 1` and no other signal — a silently wrong number on a credit
+# file. NestJS assembles the vector from the registered feature schema, so an
+# unknown key means the two sides are out of sync. Expect 400 listing the exact
+# keys this model consumes.
+POST {{mlUrl}}/predict
+Content-Type: {{contentType}}
+
+{
+  "features": {
+    "total_inflow": 1020000,
+    "income_regularity": 0.94,
+    "avg_balance": 300000,
+    "balance_retention": 0.9,
+    "obligation_ratio": 0.624,
+    "months_covered": 12,
+    "bounce_count": 1,
+    "gst_turnover": null,
+    "gst_filing_consistency": null
+  },
+  "coverage": 0.87,
+  "model_version": "{{mlVersion}}"
+}
+
+### 40.4c Empty model_version is a 422
+# An empty string used to slip past the version guard entirely — the one check
+# that keeps a score reproducible.
+POST {{mlUrl}}/predict
+Content-Type: {{contentType}}
+
+{
+  "features": { "monthly_inflow": 85000, "months_covered": 12 },
+  "coverage": 0.5,
+  "model_version": ""
+}
+
+### 40.6 /score-batch — the audit path, one round trip for a whole cohort
+# NestJS owns the fairness MATHS (one implementation shared by both runtimes) and
+# only needs the scores. Fetching them one predict at a time made a 2000-subject
+# audit 2000 HTTP round trips; measured server-side, batched is 0.22s vs 45.7s.
+# Capped at 5000 rows — unbounded `rows` is an OOM waiting to happen.
+POST {{mlUrl}}/score-batch
+Content-Type: {{contentType}}
+
+{
+  "model_version": "{{mlVersion}}",
+  "rows": [
+    { "monthly_inflow": 85000, "income_regularity": 0.94, "avg_balance": 300000,
+      "balance_retention": 0.9, "obligation_ratio": 0.624, "months_covered": 12,
+      "bounce_count": 1, "gst_turnover": null, "gst_filing_consistency": null },
+    { "monthly_inflow": 28000, "income_regularity": 0.61, "avg_balance": 15000,
+      "balance_retention": 0.4, "obligation_ratio": 0.95, "months_covered": 4,
+      "bounce_count": 2, "gst_turnover": null, "gst_filing_consistency": null }
+  ]
+}
+
+### 40.5 Fairness — every metric paired with a significance test
+# Each group needs its gap to be BOTH materially large and significant at α=0.05.
+# The four-fifths ratio on its own fires on sampling noise: the first real
+# back-test flagged gender:other at 0.792 and nationality:US at 0.705 on a
+# population where those attributes are generated INDEPENDENTLY of every feature.
+#
+# Verified in both directions on a 600-subject cohort:
+#   gender gap via avg_balance        -> DI 0.914, z=-1.69 (ns) -> PASSES
+#                                        (the model is behaviour-weighted)
+#   same gap via income_regularity    -> DI 0.687, z=-5.50      -> BLOCKS
+#   age_band gap in both cases        -> reported as monitored, never blocking
+#
+# `blocking_attributes` is gender + nationality. Supply `y_true` per row to enable
+# equal opportunity; it is omitted entirely rather than faked when labels are absent.
+POST {{mlUrl}}/fairness
+Content-Type: {{contentType}}
+
+{
+  "positive_band_min": 670,
+  "rows": [
+    {
+      "features": { "monthly_inflow": 40000, "income_regularity": 0.7, "avg_balance": 60000,
+                    "balance_retention": 0.5, "obligation_ratio": 0.8, "months_covered": 6,
+                    "bounce_count": 1, "gst_turnover": null, "gst_filing_consistency": null },
+      "protected": { "gender": "female", "age_band": "18-25", "nationality": "IN" },
+      "coverage": 0.7, "y_true": 0
+    },
+    {
+      "features": { "monthly_inflow": 120000, "income_regularity": 0.95, "avg_balance": 400000,
+                    "balance_retention": 0.9, "obligation_ratio": 0.5, "months_covered": 22,
+                    "bounce_count": 0, "gst_turnover": null, "gst_filing_consistency": null },
+      "protected": { "gender": "male", "age_band": "46-60", "nationality": "IN" },
+      "coverage": 0.95, "y_true": 1
+    }
+  ]
+}
+# NOTE: two rows is far below the 30-subject decisiveness floor, so every metric
+# will report but none will decide. That is the guard working — use the seeded
+# 200-subject cohort via the NestJS audit (§11.2) for a verdict that means something.

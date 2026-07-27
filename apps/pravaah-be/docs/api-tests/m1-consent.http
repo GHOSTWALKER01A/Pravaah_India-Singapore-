@@ -1,0 +1,246 @@
+########################################################################
+# PRAVAAH · M1 — Consent & Data Aggregation (Account Aggregator) — API test book
+#
+# Works with the VS Code "REST Client" extension and JetBrains HTTP client.
+# Send a request by clicking "Send Request" above each `###` block.
+#
+# Base = global prefix `api` + URI version `v1`  ->  /api/v1/...
+# Port defaults to 8000 (main.ts: process.env.PORT ?? 8000).
+#
+# PROVIDER MODE (env AA_MODE):
+#   sandbox (default) — in-memory mock AA. approvalUrl points at our own mock
+#                       consent screen (§3), which drives the SAME notification
+#                       path a live webhook would. Fully functional offline.
+#   setu              — real Setu (Bridge). Auth is a token exchange at
+#                       SETU_AA_TOKEN_URL (default uat.setu.co/api/v2/auth/token)
+#                       then Bearer + x-product-instance-id. REQUIRES
+#                       SETU_AA_BASE_URL = your FIU base from the Bridge dashboard
+#                       ("Step 2"); the public fiu-sandbox host rejects Bridge
+#                       tokens ("Token issuer not allowed"). Creds already in
+#                       .env.development.local (SETU_AA_CLIENT_ID/SECRET_KEY/
+#                       PRODUCT_ID) — token issuance is verified working.
+#   finvu             — Finvu/Finsense fallback. Needs FINVU_API_KEY +
+#                       FINVU_JWS_PRIVATE_KEY (Sahamati onboarding).
+#   live              — try Setu, fall back to Finvu at consent-create; the
+#                       winning provider is pinned on the consent for all later
+#                       calls. Unconfigured providers are skipped.
+#   The approve/reject mock screen (§3) is sandbox-only.
+#
+# AUTH: /consent/* is guarded by our session JWT (issued by TokenService after
+#   OTP verify). Paste a VERIFIED user's access token into @accessToken.
+#   The seeded VERIFIED India user is ARJUN SHARMA (+919876543210) — log in as
+#   that number (dev-bypass OTP if configured) to get a token whose `sub` is a
+#   VERIFIED user, which the consent-create guard requires.
+#   Admin routes need an ADMIN-role token -> @adminToken.
+#
+# DEMO ARC (sandbox):
+#   1 create -> open approvalUrl (or §3 POST approve) -> auto-fetch runs
+#   -> 2 GET status = DATA_READY (session COMPLETED, coverage 2/2)
+#   -> 4 admin sees the consent + audit trail
+#   -> 5 revoke -> data purged (the trust money-shot)
+#   Flip AA_SANDBOX_PARTIAL=true to demo PARTIAL coverage (1/2) + link-more.
+########################################################################
+
+@baseUrl = http://localhost:8000/api/v1
+@contentType = application/json
+
+# ── paste your tokens here ─────────────────────────────────────────────
+@accessToken = PASTE_VERIFIED_USER_JWT
+@adminToken  = PASTE_ADMIN_JWT
+
+
+########################################################################
+# 1 · Create consent  (VERIFIED user only)
+#     fiTypes: DEPOSIT | TERM_DEPOSIT | RECURRING_DEPOSIT | MUTUAL_FUNDS
+#              | EQUITIES | GSTR
+#     fetchType: ONETIME | PERIODIC (PERIODIC requires "frequency")
+#     dataLife.unit: MONTH | YEAR | INF
+#     purposeCode: 3-digit AA code (e.g. "101" spending, "103" monitoring)
+########################################################################
+
+# @name createConsent
+POST {{baseUrl}}/consent/create
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "fiTypes": ["DEPOSIT", "GSTR"],
+  "purpose": "Assess financial reputation for a cross-border credit passport",
+  "purposeCode": "101",
+  "fetchType": "ONETIME",
+  "dataRange": {
+    "from": "2025-07-01",
+    "to": "2026-06-30"
+  },
+  "dataLife": {
+    "unit": "MONTH",
+    "value": 6
+  }
+}
+
+###
+# PERIODIC variant (ongoing monitoring — needs a frequency)
+POST {{baseUrl}}/consent/create
+Content-Type: {{contentType}}
+Authorization: Bearer {{accessToken}}
+
+{
+  "fiTypes": ["DEPOSIT"],
+  "purpose": "Ongoing reputation monitoring",
+  "purposeCode": "103",
+  "fetchType": "PERIODIC",
+  "frequency": { "unit": "MONTH", "value": 1 },
+  "dataRange": { "from": "2025-07-01", "to": "2026-06-30" },
+  "dataLife": { "unit": "YEAR", "value": 1 }
+}
+
+
+########################################################################
+# 2 · Consent dashboard + per-consent status
+########################################################################
+
+###
+# All of this user's consents (the Consent Dashboard).
+GET {{baseUrl}}/consent
+Authorization: Bearer {{accessToken}}
+
+###
+# One consent's status + latest data-session coverage (fipCompleted/fipTotal).
+# After approval (§3) this shows session COMPLETED, coverage 1.0.
+GET {{baseUrl}}/consent/{{createConsent.response.body.data.consentId}}/status
+Authorization: Bearer {{accessToken}}
+
+
+########################################################################
+# 3 · Mock AA consent screen  (sandbox only · NO auth)
+#     The approvalUrl returned by §1 points here. Open it in a browser to see
+#     the consent UX, or drive it with the requests below.
+#     providerConsentId is auto-pulled from the §1 create response.
+########################################################################
+
+###
+# View the mock consent screen (HTML) for the pending consent.
+GET {{baseUrl}}/mock/aa/{{createConsent.response.body.data.providerConsentId}}
+
+###
+# APPROVE — flips consent ACTIVE, verifies the (mock) artefact, auto-creates the
+# data session, fetches + decrypts + normalises the dummy FI data. After this,
+# re-run §2 status -> COMPLETED.
+POST {{baseUrl}}/mock/aa/{{createConsent.response.body.data.providerConsentId}}
+Content-Type: {{contentType}}
+
+{
+  "decision": "APPROVE"
+}
+
+###
+# REJECT path (create a fresh consent first, then reject it) -> status REJECTED.
+POST {{baseUrl}}/mock/aa/{{createConsent.response.body.data.providerConsentId}}
+Content-Type: {{contentType}}
+
+{
+  "decision": "REJECT"
+}
+
+
+########################################################################
+# 4 · Manual re-fetch  (e.g. after linking more accounts on a PARTIAL consent)
+########################################################################
+
+###
+POST {{baseUrl}}/consent/{{createConsent.response.body.data.consentId}}/refetch
+Authorization: Bearer {{accessToken}}
+
+
+########################################################################
+# 5 · Revoke  (propagates to AA, purges raw + normalised data immediately)
+#     Demo the trust money-shot: revoke, then re-run §2 status/dashboard and
+#     show the data-session/features gone.
+########################################################################
+
+###
+DELETE {{baseUrl}}/consent/{{createConsent.response.body.data.consentId}}
+Authorization: Bearer {{accessToken}}
+
+
+########################################################################
+# 6 · AA webhook  (no user auth; signature-authenticated)
+#     Accepts EITHER of two signatures:
+#       (a) REAL AA path — x-jws-signature: the AA's detached JWS, verified
+#           against the provider that owns the referenced consent/session. This
+#           is how live Setu/Finvu actually sign (with THEIR key, not our HMAC).
+#       (b) TESTING path — our HMAC (reuse `npm run sign:webhook`):
+#             x-webhook-timestamp : epoch ms, within 5 min of now
+#             x-webhook-signature : hex HMAC-SHA256(WEBHOOK_HMAC_SECRET,
+#                                   `${timestamp}.${rawBody}`)
+#     Unsigned → 403. Replay-protected: a repeated (provider, eventId) is
+#     acked & ignored. In sandbox you normally use §3 instead; this exercises
+#     the real path a live notification takes (consent status + FI-data-ready).
+########################################################################
+
+###
+# Consent status notification (ACTIVE)
+POST {{baseUrl}}/webhooks/aa
+Content-Type: {{contentType}}
+x-webhook-timestamp: 1700000000000
+x-webhook-signature: PUT_COMPUTED_HMAC_HEX_HERE
+
+{
+  "notificationId": "aa_evt_consent_001",
+  "type": "CONSENT",
+  "ConsentStatusNotification": {
+    "consentId": "PASTE_providerConsentId_FROM_CREATE",
+    "consentStatus": "ACTIVE"
+  }
+}
+
+###
+# FI-data-ready notification
+POST {{baseUrl}}/webhooks/aa
+Content-Type: {{contentType}}
+x-webhook-timestamp: 1700000000000
+x-webhook-signature: PUT_COMPUTED_HMAC_HEX_HERE
+
+{
+  "notificationId": "aa_evt_fi_001",
+  "type": "FI",
+  "FIStatusNotification": {
+    "sessionId": "PASTE_providerSessionId",
+    "FIStatus": "READY"
+  }
+}
+
+
+########################################################################
+# 7 · Admin — consent estate + audit trail  (needs an ADMIN / SENIOR token)
+########################################################################
+
+# @name adminList
+GET {{baseUrl}}/admin/consent?status=ACTIVE
+Authorization: Bearer {{adminToken}}
+
+###
+# All statuses (omit the filter)
+GET {{baseUrl}}/admin/consent
+Authorization: Bearer {{adminToken}}
+
+###
+# Consent-scoped append-only audit trail (ADMIN only)
+GET {{baseUrl}}/admin/consent/{{adminList.response.body.data.0.id}}/audit
+Authorization: Bearer {{adminToken}}
+
+
+########################################################################
+# Edge cases worth demoing (every row has a code path — see the M1 build bible §10):
+#   • Non-VERIFIED / suspended user creating consent      -> 403
+#   • Invalid / future / reversed data range              -> 400 (Zod)
+#   • Duplicate active consent, same purposeCode          -> reuses existing
+#   • Reject at AA (§3)                                    -> REJECTED
+#   • Abandon approval (never approve)                     -> EXPIRED (cron, 5 min)
+#   • Illegal/late transition (ACTIVE after REVOKED)       -> ignored + audited
+#   • Revoke mid-fetch                                     -> session FAILED, data purged
+#   • Partial FIP coverage (AA_SANDBOX_PARTIAL=true)       -> PARTIAL, coverage 1/2
+#   • Missed FI notification                               -> repoll cron re-fetches
+#   • Data-life expiry                                     -> hourly cron hard-deletes
+#   • Duplicate/replayed webhook                           -> acked & ignored (dedupe)
+########################################################################

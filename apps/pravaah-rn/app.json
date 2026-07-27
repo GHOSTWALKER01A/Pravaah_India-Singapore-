@@ -16,12 +16,13 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#0E3B2E",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false,
+      "predictiveBackGestureEnabled": true,
+      "edgeToEdgeEnabled": true,
       "package": "com.pravaah.app"
     },
     "web": {
@@ -33,9 +34,21 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
+          "backgroundColor": "#0E3B2E",
+          "dark": {
+            "backgroundColor": "#06120E"
+          },
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
+        }
+      ],
+      "expo-font",
+      "expo-web-browser",
+      "expo-notifications",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Pravaah uses the camera to capture your selfie for the liveness check and to photograph your ID document for verification."
         }
       ]
     ],

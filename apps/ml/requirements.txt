@@ -1,0 +1,27 @@
+# pravaah-inference (M2). Verified installing from wheels only on Python 3.14.0:
+#   numpy 2.4.6 · scikit-learn 1.9.0 · xgboost 3.3.0 · shap 0.52.0
+#   fastapi 0.140.0 · pydantic 2.13.4
+#
+# NOTE ON PYTHON VERSION: xgboost and shap occasionally lag a brand-new CPython by
+# a release, in which case pip falls back to a source build and usually fails. If
+# that happens on your interpreter, use the Dockerfile (pinned to 3.12). Note also
+# that `train.py` degrades to sklearn's HistGradientBoosting when xgboost is
+# missing, so TreeSHAP stays exact either way.
+#
+# None of this blocks M2: the NestJS `scorecard` runtime serves scores in-process
+# by default, and this service is opt-in via ML_MODE=fastapi.
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.32,<1.0
+pydantic>=2.9,<3.0
+
+numpy>=1.26,<3.0
+scikit-learn>=1.5,<2.0
+joblib>=1.4,<2.0
+
+# Exact TreeSHAP for tree ensembles.
+shap>=0.46,<1.0
+
+# Preferred estimator. `train.py` falls back to sklearn's HistGradientBoosting
+# when this is unavailable, so an install failure here degrades rather than
+# blocks — both are tree ensembles, so TreeExplainer stays exact either way.
+xgboost>=2.1,<4.0

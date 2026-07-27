@@ -1,7 +1,7 @@
 import { createAppLogger } from '@pravaah/nestjs-logger'
 import { z } from 'zod'
 
-const logger = createAppLogger({ serviceName: 'urb' }).child({
+const logger = createAppLogger({ serviceName: 'pravaah-be' }).child({
   context: 'Validation',
 })
 

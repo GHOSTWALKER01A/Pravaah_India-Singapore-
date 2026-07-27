@@ -1,0 +1,109 @@
+# Local infrastructure for pravaah-be.
+#
+# Cache only (default — backend runs locally via `npm run dev`):
+#   docker compose up -d cache          # start Redis; app connects via CACHE_HOST=localhost
+#   docker compose logs -f cache
+#   docker compose down
+#
+# Full stack (api + cache + M2 inference together, "oscode-style"):
+#   docker compose --profile full up -d --build
+#   The api container connects to the cache and the ML service by their service
+#   names (CACHE_HOST=cache, ML_BASE_URL=http://ml:8000), reading the rest of its
+#   config from .env.development.local.
+#
+# M2 inference only (the backend still runs locally via `npm run dev`):
+#   docker compose --profile ml up -d --build ml
+#   Then set ML_MODE=fastapi and ML_BASE_URL in .env.development.local. Not needed
+#   at all for the default in-process `scorecard` runtime.
+services:
+  cache:
+    image: redis:7-alpine
+    container_name: pravaah-cache
+    command:
+      ['redis-server', '--appendonly', 'yes', '--maxmemory-policy', 'noeviction']
+    ports:
+      - '6379:6379'
+    volumes:
+      - pravaah-cache-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Opt-in: the backend itself, built from the multi-stage Dockerfile. Only
+  # started with `--profile full`, so the default `up` stays cache-only.
+  api:
+    profiles: ['full']
+    build:
+      # The Dockerfile prunes the whole monorepo, so the build context is the
+      # repo root, not this app folder.
+      context: ../..
+      dockerfile: apps/pravaah-be/Dockerfile
+    container_name: pravaah-api
+    env_file:
+      - .env.development.local
+    environment:
+      # Override the local-dev CACHE_HOST so the container reaches the cache
+      # service on the compose network instead of localhost.
+      CACHE_HOST: cache
+      CACHE_PORT: '6379'
+      PORT: '8000'
+      # M2: reach the inference sidecar by service name. `auto` so a fastapi-
+      # runtime model degrades to the in-process scorecard rather than failing
+      # every score if the ml container is unhealthy — the substitution is
+      # recorded on Score.servedBy.
+      ML_MODE: auto
+      ML_BASE_URL: http://ml:8000
+    ports:
+      - '8000:8000'
+    depends_on:
+      cache:
+        condition: service_healthy
+      ml:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8000/api/v1']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # M2 inference service (XGBoost + TreeSHAP + fairness). Opt-in, because M2's
+  # default `scorecard` runtime serves scores in-process and needs nothing here —
+  # this container is only required for a model version declaring
+  # `runtime: "fastapi"`. Start it with `--profile ml`.
+  #
+  # NOT published to the host by default: it is reachable only on the compose
+  # network, as `http://ml:8000`. Anyone who can call /predict directly can shop
+  # for a score, so it must never be internet-facing.
+  ml:
+    profiles: ['ml', 'full']
+    build:
+      # The Dockerfile copies apps/ml, so the build context is the repo root.
+      context: ../..
+      dockerfile: apps/ml/Dockerfile
+    container_name: pravaah-ml
+    environment:
+      MODEL_PATH: /srv/models/model.joblib
+      FEATURE_SCHEMA_PATH: /srv/models/feature_schema.joblib
+      MODEL_VERSION: '1.0.0'
+      PORT: '8000'
+    expose:
+      - '8000'
+    # Uncomment ONLY for local debugging against the OpenAPI docs at /docs.
+    # ports:
+    #   - '8100:8000'
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'curl', '-fsS', 'http://localhost:8000/health']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      # Training runs at image build time, but the first shap import is slow.
+      start_period: 30s
+
+volumes:
+  pravaah-cache-data:

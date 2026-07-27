@@ -27,6 +27,18 @@ out/
 build
 dist
 
+# Python (apps/ml) — a virtualenv is ~12k files. Left untracked it still gets
+# crawled by anything walking the repo (Metro watched it on every RN start), so it
+# is excluded here AND in apps/pravaah-rn/metro.config.js.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+# Trained model artefacts: build output, reproducible from `python -m app.train`
+# with a fixed seed. A committed .joblib is an unreviewable binary that would
+# silently outrank the code that produced it.
+*.joblib
+
 
 # Debug
 npm-debug.log*

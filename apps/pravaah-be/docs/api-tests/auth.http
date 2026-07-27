@@ -1,0 +1,93 @@
+########################################################################
+# PRAVAAH · Auth — phone OTP via Twilio Verify
+#
+# VS Code "REST Client" / JetBrains HTTP client.  Base = /api/v1/auth/...
+#
+# HOW IT WORKS:
+#   send-otp  -> Twilio Verify sends the SMS code (Verifications API)
+#   verify    -> Twilio Verify checks the code (VerificationCheck API); on
+#                approval the backend mints its OWN session JWTs (no Supabase).
+#   refresh   -> exchanges a refresh token for a fresh pair.
+#
+# Requires env: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN,
+#               TWILIO_VERIFY_SERVICE_SID, AUTH_JWT_SECRET.
+########################################################################
+
+@baseUrl = http://localhost:8000/api/v1
+@contentType = application/json
+
+@countryCode = 91
+@phone = 7389721118
+
+# One flow for both sign in and sign up — an unknown number is created on
+# first verify (login === signup).
+
+### 1 · Send OTP (real SMS via Twilio) -> 200
+# @name sendOtp
+POST {{baseUrl}}/auth/send-otp
+Content-Type: {{contentType}}
+
+{
+  "phone": "{{phone}}",
+  "countryCode": "{{countryCode}}"
+}
+
+### 2 · Resend OTP -> 200
+POST {{baseUrl}}/auth/resend-otp
+Content-Type: {{contentType}}
+
+{
+  "phone": "{{phone}}",
+  "countryCode": "{{countryCode}}"
+}
+
+### 3 · Verify OTP -> 200 { userId, kycStatus, accessToken, refreshToken }
+#        Replace 123456 with the code from the SMS.
+# @name verify
+POST {{baseUrl}}/auth/verify
+Content-Type: {{contentType}}
+
+{
+  "phone": "{{phone}}",
+  "countryCode": "{{countryCode}}",
+  "otp": "123456"
+}
+
+### 4 · Capture tokens
+@accessToken = {{verify.response.body.data.accessToken}}
+@refreshToken = {{verify.response.body.data.refreshToken}}
+
+### 5 · Refresh session -> 200 { accessToken, refreshToken }
+POST {{baseUrl}}/auth/refresh
+Content-Type: {{contentType}}
+
+{
+  "refreshToken": "{{refreshToken}}"
+}
+
+### 6 · Smoke-test the token against a guarded route (expect 200)
+GET {{baseUrl}}/kyc/status
+Authorization: Bearer {{accessToken}}
+
+
+########################################################################
+# Negative checks
+########################################################################
+
+### N1 · Invalid phone -> 400 (Zod)
+POST {{baseUrl}}/auth/send-otp
+Content-Type: {{contentType}}
+
+{ "phone": "9998887776", "countryCode": "91" }
+
+### N2 · Wrong / expired OTP -> 400
+POST {{baseUrl}}/auth/verify
+Content-Type: {{contentType}}
+
+{ "phone": "9998887776", "countryCode": "{{countryCode}}", "otp": "123456" }
+
+### N3 · Bad refresh token -> 401
+POST {{baseUrl}}/auth/refresh
+Content-Type: {{contentType}}
+
+{ "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0eXAiOiJyZWZyZXNoIiwicm9sZSI6InVzZXIiLCJwaG9uZSI6Iis5MTk5OTg4ODc3NzYiLCJzdWIiOiI2ZmExMDQ2Mi1lYWVkLTRkMzctYWQwOC1mYjhjMWI5ZDU4YjAiLCJpc3MiOiJwcmF2YWFoIiwiYXVkIjoicHJhdmFhaC1hcHAiLCJpYXQiOjE3ODUwMTQ0ODUsImV4cCI6MTc4NzYwNjQ4NX0.ikOOXlmWkoRV5EIGUCfRg9Yta8STTd1mcYoc3et1ons" }

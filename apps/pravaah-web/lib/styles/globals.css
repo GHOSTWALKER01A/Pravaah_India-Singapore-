@@ -1,0 +1,395 @@
+@import "tailwindcss";
+
+/*
+  Security engraving — the face of a banknote. See DESIGN.md.
+  Fonts arrive via next/font in app/layout.tsx; nothing is @imported here so
+  the sheet never blocks first paint on a mid-range phone over mobile data.
+*/
+
+@theme {
+  /* ── Substrate ─────────────────────────────────────────────────────
+     Security rag paper: cool, with a faint green cast. Deliberately not
+     cream — cream is the default this world is chosen to avoid. */
+  --color-rag: #eeefe7;
+  --color-rag-shade: #e2e5d9;
+  --color-ink: #101911;
+
+  /* ── The committed field colour ────────────────────────────────────
+     Deep intaglio green owns whole regions of the page, not accents. */
+  --color-intaglio: #0e3b2e;
+  --color-intaglio-deep: #082018;
+  --color-intaglio-mid: #1a5a45;
+
+  /* Reversed out of the field. `reverse-dim` is tinted from the field hue
+     rather than grayed — gray secondary text on a coloured ground reads as
+     a mistake. Measures 6.6:1 against --color-intaglio. */
+  --color-reverse: #eeefe7;
+  --color-reverse-dim: #a8c4b6;
+
+  /* ── Second-colour iris print ──────────────────────────────────────
+     The counter colour a note reserves for the value you must not miss.
+     Here: revocation, deletion, and the words under pressure. 6.3:1 on rag. */
+  --color-carmine: #a81f3c;
+  --color-carmine-deep: #7c1129;
+
+  /* ── Latent / thread ───────────────────────────────────────────────
+     Two golds, split by job, because one value cannot do both well.
+
+     `latent` is the TEXT gold: legends, seals, emphasised display. Lightened
+     from the ink-true #b08434 (which measured 3.68:1 against the field and so
+     failed AA at legend and body sizes) to 5.3:1 on --color-intaglio and
+     7.3:1 on --color-intaglio-deep.
+
+     `latent-line` keeps the deeper ink value for what it is actually good at:
+     hairline ornament — guilloche, the security thread, engine-turned bands,
+     panel keylines, microtext. All non-text, so the ratio does not apply, and
+     fine line work reads better struck darker. */
+  --color-latent: #d0a24a;
+  --color-latent-line: #b08434;
+  --color-latent-dim: #8a672a;
+
+  --font-display: var(--font-bodoni), "Bodoni MT", Didot, serif;
+  --font-sans: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-azeret), ui-monospace, "SFMono-Regular", monospace;
+
+  --ease-note: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+    /* Engraver's gothic: Archivo's width axis pushed wide, all-caps, tracked
+       out. This is the issuing-authority legend on every note. */
+    --legend-width: 118;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+  }
+
+  /* SmoothScroll stamps this on <html> once Lenis is running. Two things
+     animating the same scroll position visibly stutter, so CSS stands down and
+     lets the library own it. Remove the library and the attribute never
+     appears, so native smooth scrolling comes straight back. */
+  html[data-lenis] {
+    scroll-behavior: auto;
+  }
+
+  body {
+    background-color: var(--color-rag);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-synthesis-weight: none;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* The sheet is a fixed-width object; nothing may push it sideways. */
+  body {
+    overflow-x: hidden;
+  }
+
+  ::selection {
+    background-color: var(--color-latent);
+    color: var(--color-intaglio-deep);
+  }
+
+  /* Identifiers, config keys and file paths have no spaces to break at. Left
+     alone, one of them sets the min-content width of its grid column and
+     pushes the whole sheet sideways on a narrow screen. */
+  code {
+    overflow-wrap: anywhere;
+  }
+
+  /* One focus treatment, legible on rag and on the field alike. */
+  :focus-visible {
+    outline: 2px solid var(--color-latent);
+    outline-offset: 3px;
+    border-radius: 1px;
+  }
+}
+
+@layer components {
+  /* ── Engraver's gothic legend ──────────────────────────────────────
+     RESERVE BANK OF INDIA is set like this. So is every field label,
+     issuing line and section legend on this site. */
+  .legend {
+    font-family: var(--font-sans);
+    font-variation-settings: "wdth" var(--legend-width);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    font-size: 0.6875rem;
+    line-height: 1.4;
+  }
+
+  @media (min-width: 640px) {
+    .legend {
+      font-size: 0.75rem;
+    }
+  }
+
+  /* ── Denomination ──────────────────────────────────────────────────
+     The didone display line. Tracking floor honoured at every size. */
+  .denomination {
+    font-family: var(--font-display);
+    font-weight: 500;
+    letter-spacing: -0.03em;
+    line-height: 0.94;
+    text-wrap: balance;
+  }
+
+  /* ── Data field ────────────────────────────────────────────────────
+     Mono here is measurement, not costume: serials, identifiers, dates. */
+  .field-value {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+  }
+
+  /* ── Prose ─────────────────────────────────────────────────────────
+     Long-form documents. Measure held at reading length, space above a
+     heading always greater than below it. */
+  .sheet-prose {
+    font-size: 1rem;
+    line-height: 1.75;
+  }
+
+  @media (min-width: 640px) {
+    .sheet-prose {
+      font-size: 1.0625rem;
+      line-height: 1.8;
+    }
+  }
+
+  .sheet-prose > * + * {
+    margin-top: 1.25rem;
+  }
+
+  .sheet-prose h2 {
+    font-family: var(--font-display);
+    font-weight: 500;
+    font-size: 1.75rem;
+    letter-spacing: -0.02em;
+    line-height: 1.15;
+    margin-top: 3.5rem;
+    margin-bottom: 0;
+    text-wrap: balance;
+  }
+
+  @media (min-width: 640px) {
+    .sheet-prose h2 {
+      font-size: 2.125rem;
+    }
+  }
+
+  .sheet-prose h3 {
+    font-family: var(--font-sans);
+    font-weight: 650;
+    font-size: 1.0625rem;
+    letter-spacing: -0.005em;
+    margin-top: 2.25rem;
+    margin-bottom: 0;
+  }
+
+  .sheet-prose h2 + *,
+  .sheet-prose h3 + * {
+    margin-top: 0.875rem;
+  }
+
+  /* A heading's generous top space is separation from the passage above it.
+     The first element has nothing above it, so the space is just a hole. */
+  .sheet-prose > :first-child {
+    margin-top: 0;
+  }
+
+  .sheet-prose ul,
+  .sheet-prose ol {
+    padding-left: 1.375rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.625rem;
+  }
+
+  .sheet-prose ul {
+    list-style: none;
+    padding-left: 0;
+  }
+
+  .sheet-prose ul > li {
+    position: relative;
+    padding-left: 1.375rem;
+  }
+
+  /* Engraved tick rather than a bullet — a note has no bullets. */
+  .sheet-prose ul > li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.72em;
+    width: 0.6875rem;
+    height: 1px;
+    background-color: var(--color-carmine);
+  }
+
+  .sheet-prose ol {
+    list-style: decimal;
+  }
+
+  .sheet-prose ol::marker,
+  .sheet-prose li::marker {
+    font-family: var(--font-mono);
+    font-size: 0.8125em;
+    color: var(--color-intaglio-mid);
+  }
+
+  .sheet-prose strong {
+    font-weight: 650;
+    color: var(--color-intaglio-deep);
+  }
+
+  .sheet-prose a {
+    color: var(--color-carmine);
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+    text-decoration-thickness: 1px;
+    text-decoration-color: color-mix(in srgb, var(--color-carmine) 40%, transparent);
+    transition: text-decoration-color 160ms var(--ease-note);
+  }
+
+  .sheet-prose a:hover {
+    text-decoration-color: var(--color-carmine);
+  }
+}
+
+@layer utilities {
+  /* ── Microtext ─────────────────────────────────────────────────────
+     Real repeated text at the threshold of legibility, exactly as printed
+     on a note. Marked aria-hidden wherever it is used. */
+  .microtext {
+    font-family: var(--font-mono);
+    font-size: 4.2px;
+    letter-spacing: 0.32em;
+    line-height: 1;
+    white-space: nowrap;
+    user-select: none;
+  }
+
+  /* ── Notch ─────────────────────────────────────────────────────────
+     A printed panel's corner is cut, not radiused. Three sizes so the cut
+     stays proportional to the panel — a control, a card, a full region. */
+  .notch-sm {
+    clip-path: polygon(
+      0 0,
+      calc(100% - 8px) 0,
+      100% 8px,
+      100% 100%,
+      8px 100%,
+      0 calc(100% - 8px)
+    );
+  }
+
+  .notch {
+    clip-path: polygon(
+      0 0,
+      calc(100% - 10px) 0,
+      100% 10px,
+      100% 100%,
+      10px 100%,
+      0 calc(100% - 10px)
+    );
+  }
+
+  .notch-lg {
+    clip-path: polygon(
+      0 0,
+      calc(100% - 17px) 0,
+      100% 17px,
+      100% 100%,
+      17px 100%,
+      0 calc(100% - 17px)
+    );
+  }
+
+  /* ── Engraved keyline ──────────────────────────────────────────────
+     A hairline that stays a hairline on retina, with the corner notch a
+     printed panel has. Never a soft-shadowed rounded rectangle. */
+  .keyline {
+    border: 1px solid color-mix(in srgb, var(--color-intaglio) 22%, transparent);
+  }
+
+  .keyline-reverse {
+    border: 1px solid color-mix(in srgb, var(--color-reverse) 26%, transparent);
+  }
+
+  /* Impression: the shallow relief of an intaglio strike. Offset and blur,
+     never a zero-offset halo. */
+  .impression {
+    box-shadow:
+      0 1px 0 0 color-mix(in srgb, var(--color-rag) 70%, white),
+      0 10px 24px -14px color-mix(in srgb, var(--color-intaglio) 45%, transparent);
+  }
+}
+
+/* ── The one authored moment: the tilt-reveal ────────────────────────
+   A note tilted to the light resolves its latent image. On this page the
+   security thread draws down the capture column and the credential's latent
+   panel resolves at the base. Content is fully visible by default; the
+   animation only enriches an already-legible sheet. */
+@keyframes thread-draw {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes latent-resolve {
+  from {
+    opacity: 0.14;
+    filter: blur(6px);
+    letter-spacing: 0.24em;
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    letter-spacing: 0.02em;
+  }
+}
+
+.thread-run {
+  transform-origin: top center;
+  animation: thread-draw linear both;
+  animation-timeline: view();
+  animation-range: entry 10% cover 62%;
+}
+
+.latent-panel {
+  animation: latent-resolve 900ms var(--ease-note) both;
+  animation-timeline: view();
+  animation-range: entry 30% cover 46%;
+}
+
+/* Browsers without scroll-driven animations get the resolved end state, not
+   a blank panel. */
+@supports not (animation-timeline: view()) {
+  .thread-run,
+  .latent-panel {
+    animation: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-run,
+  .latent-panel {
+    animation: none;
+  }
+}

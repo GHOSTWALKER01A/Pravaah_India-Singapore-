@@ -1,2 +1,2 @@
 export { APIResponseSchema, type APIResponse } from '@pravaah/schema'
-export * from './pagination-response.type'
+export * from '@/common/types/pagination-response.types'
