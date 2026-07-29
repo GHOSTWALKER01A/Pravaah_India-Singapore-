@@ -6,7 +6,7 @@
 
 **Security engraving — the face of a banknote.**
 
-A banknote is state-issued trust made portable and carried by the bearer. That is Pravaah's
+A banknote is state-issued trust made portable and carried by the bearer. That is MyPravaah's
 mechanism exactly: a credential whose value travels with the person holding it. The note's
 own anti-forgery vocabulary maps one-to-one onto the product, which is why this world is
 functional rather than decorative:
@@ -86,7 +86,10 @@ the multi-language panel. **Same-size icon-heading-text cards are not the page s
 
 The home page's spine is a **capture column**: scattered financial history at the top,
 combed out through the consent gate in the middle, concentrated into one serialised
-credential at the base. Pravaah means *flow*; the scroll is that flow.
+credential at the base. *Pravaah* is flow, and the scroll is that flow — the etymology is the
+reason for the composition, not a line of copy. It used to be printed under the wordmark and
+is not any more: the seal does that job of saying "you are in the right place" better than a
+nine-pixel gloss competing with the name above it.
 
 Ordered numbering is earned only where the order carries information the reader needs — the
 M0→M7 chain (each step is impossible without the previous one) and the per-corridor KYC
@@ -100,6 +103,17 @@ capture column as it scrolls, resolving the credential's latent panel at the bas
 ease-out from an already-visible default — content is never hidden waiting for an observer.
 Everything collapses to a static, fully legible sheet under `prefers-reduced-motion`.
 
+Two rules the moment depends on, both of which it silently lost once:
+
+- **A scroll-driven keyframe may only touch `opacity`, `filter` and `transform`.** It runs on
+  every scroll frame, so a layout property in it reflows the whole document each time — and
+  this sheet carries several thousand-segment guilloche paths that then repaint with it. The
+  latent panel animated `letter-spacing` and that is what made a fast scroll hitch and stall.
+- **`overflow: clip`, never `overflow: hidden`.** `hidden` on one axis computes the other to
+  `auto`, which makes the element a scroll container — and `animation-timeline: view()`
+  resolves against the nearest scroll-container ancestor. Under `hidden` the thread was being
+  driven by a box that never scrolls, so the authored moment was not running at all.
+
 ## Rules
 
 - Never gradient text; emphasis is weight, size, or the second colour.
@@ -107,4 +121,9 @@ Everything collapses to a static, fully legible sheet under `prefers-reduced-mot
   decoration laid over a section that has not earned it.
 - Every factual claim traces to something the system does. Unverified specifics ship as
   visibly marked placeholders, never as confident prose.
-- Roadmap modules are labelled as roadmap wherever they appear.
+- The product's stage is rendered from `STAGE`, never written into a page's prose, and both
+  halves of it always appear together: eight modules built, no licence held. See PRODUCT.md.
+- A status badge that reads the same on every row is either the argument or it is noise.
+  Keep it when the uniformity is the point (the chain: a reader expects roadmap and finds
+  none); remove it when it is not (the security ledger, where it was eight identical marks
+  implying there were exceptions to hunt for).

@@ -13,6 +13,18 @@ interface RequestOptions {
   /** A plain object (sent as JSON) or a FormData (sent as multipart). */
   body?: Json | FormData;
   auth?: boolean;
+  /**
+   * Extra request headers. Added for M4, which requires an `Idempotency-Key` on
+   * every money-moving request.
+   *
+   * It matters that these live on the options object rather than being passed
+   * separately to `fetch`: the 401 refresh path below RE-RUNS `raw()` with the
+   * same options, so a retried request carries the SAME idempotency key. Minting
+   * the key inside the client instead would give the retry a new one, and the
+   * server would treat it as a second payment — the exact failure idempotency
+   * exists to prevent.
+   */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -40,6 +52,10 @@ class ApiClient {
       const token = tokenManager.getAccessToken();
       if (token) headers.Authorization = `Bearer ${token}`;
     }
+    // Caller headers last, so an explicit one wins. The bearer is still correct on
+    // a retry because `raw()` re-reads it from the token manager on every attempt —
+    // the refresh path replays these same options, it does not reuse this object.
+    Object.assign(headers, options.headers);
 
     let res: Response;
     try {
@@ -110,6 +126,21 @@ class ApiClient {
   }
   post<T>(path: string, body?: Json, auth = true): Promise<T> {
     return this.request<T>(path, { method: 'POST', body, auth });
+  }
+  /**
+   * POST with extra headers — the M4 money-moving verb.
+   *
+   * Separate from `post` rather than a fourth positional argument, so a call site
+   * that needs an idempotency key cannot silently omit it by getting the argument
+   * order wrong.
+   */
+  postWith<T>(
+    path: string,
+    body: Json | undefined,
+    headers: Record<string, string>,
+    auth = true,
+  ): Promise<T> {
+    return this.request<T>(path, { method: 'POST', body, headers, auth });
   }
   /** POST a multipart/form-data body (file uploads). */
   postForm<T>(path: string, form: FormData, auth = true): Promise<T> {

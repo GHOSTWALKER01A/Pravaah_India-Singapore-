@@ -6,12 +6,7 @@
  * app DOES do — unlike the web sheet — is honour that setting, because the use
  * scene is a phone read outdoors in daylight and in a dim room at night.
  */
-import {
-  createContext,
-  useContext,
-  useMemo,
-  type ReactNode,
-} from 'react';
+import { createContext, useContext, type ReactNode } from 'react';
 import { useReducedMotion } from 'react-native-reanimated';
 
 // The project's own hook, not RN's: the `.web` variant defers to 'light' until
@@ -45,15 +40,16 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // live, so a user turning it on mid-session gets the static app immediately.
   const reduced = useReducedMotion();
 
-  const value = useMemo<ThemeValue>(() => {
-    const scheme: Scheme = os === 'dark' ? 'dark' : 'light';
-    return {
-      scheme,
-      palette: Palettes[scheme],
-      band: BAND_INK[scheme],
-      motionOk: !reduced,
-    };
-  }, [os, reduced]);
+  const scheme: Scheme = os === 'dark' ? 'dark' : 'light';
+  // Not hand-memoised: the React Compiler memoises this object on `os` and `reduced`, which
+  // is exactly the pair the removed `useMemo` listed. A context value is the case the
+  // compiler earns its keep on — every component in the app reads this one.
+  const value: ThemeValue = {
+    scheme,
+    palette: Palettes[scheme],
+    band: BAND_INK[scheme],
+    motionOk: !reduced,
+  };
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }

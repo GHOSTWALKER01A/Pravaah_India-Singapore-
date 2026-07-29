@@ -19,7 +19,7 @@ export default function NotFound(): ReactElement {
       <Header />
       <main
         id="main"
-        className="relative flex-auto overflow-hidden bg-intaglio py-24 text-reverse sm:py-32"
+        className="relative flex-auto overflow-clip bg-intaglio py-24 text-reverse sm:py-32"
       >
         <Guilloche
           seed={3}
@@ -49,7 +49,7 @@ export default function NotFound(): ReactElement {
                 {
                   label: "Introduction",
                   href: ROUTES.HOME,
-                  blurb: "What Pravaah is and how the data moves.",
+                  blurb: "What MyPravaah is and how the data moves.",
                 },
                 {
                   label: "How to apply",

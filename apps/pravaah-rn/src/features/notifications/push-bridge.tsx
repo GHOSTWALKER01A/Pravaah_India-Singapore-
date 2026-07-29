@@ -43,10 +43,29 @@ export function PushNotificationsBridge() {
         void kycService.registerPushToken(token).catch(() => undefined);
       }
 
-      // Tapping a decision notification opens the status screen (which forwards
-      // to the passport if the user is verified).
+      /**
+       * Route a tap by what the notification was ABOUT.
+       *
+       * This used to send every tap to the KYC status screen, which was fine while a KYC
+       * decision was the only thing that could push. It is not any more: a peer scan asks
+       * the holder to approve a disclosure, and somebody is standing in front of them
+       * waiting — landing them on their own verification checklist instead of the consent
+       * sheet would make the notification worse than useless.
+       *
+       * The `kind` is read from the payload the server sends and matched exhaustively, with
+       * the old behaviour as the fallback so any notification predating this switch still
+       * goes where it always did.
+       */
       subscription = Notifications.addNotificationResponseReceivedListener(
-        () => {
+        (response) => {
+          const data = response.notification.request.content.data as
+            | { kind?: string; requestId?: string }
+            | undefined;
+
+          if (data?.kind === 'passport.peer_request' && data.requestId) {
+            router.push(ROUTES.PASSPORT.REQUEST(data.requestId));
+            return;
+          }
           router.push(ROUTES.KYC.STATUS);
         },
       );

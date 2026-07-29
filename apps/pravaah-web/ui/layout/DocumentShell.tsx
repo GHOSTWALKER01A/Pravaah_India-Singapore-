@@ -40,7 +40,7 @@ export function DocumentShell({
         <Container>
           <div className="flex flex-wrap items-baseline justify-between gap-x-8 gap-y-2">
             <Legend className="text-intaglio-mid">
-              Pravaah · {reference}
+              MyPravaah · {reference}
             </Legend>
             <Legend className="text-intaglio-mid">
               Last updated {updated}

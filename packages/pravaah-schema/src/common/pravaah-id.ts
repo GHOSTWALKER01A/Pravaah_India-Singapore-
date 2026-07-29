@@ -75,14 +75,23 @@ function checkSymbol(body: string): string {
   let sum = 0
   // Right to left: the weight of a symbol must not shift when the body grows.
   for (let i = body.length - 1; i >= 0; i -= 1) {
-    const value = ALPHABET.indexOf(body[i])
-    if (value < 0) throw new Error(`Not a Base32 symbol: ${body[i]}`)
+    // `i` is bounded by the loop, so the index is always in range — the assertion is
+    // what `noUncheckedIndexedAccess` needs to be told, not a claim being taken on
+    // trust. Hoisted so the symbol is read once rather than indexed twice.
+    const symbol = body[i]!
+    const value = ALPHABET.indexOf(symbol)
+    if (value < 0) throw new Error(`Not a Base32 symbol: ${symbol}`)
     const addend = factor * value
     factor = factor === 2 ? 1 : 2
     // Fold the overflow back in, exactly as Luhn folds a two-digit product.
     sum += Math.floor(addend / BASE) + (addend % BASE)
   }
-  return ALPHABET[(BASE - (sum % BASE)) % BASE]
+
+  // Provably a valid index, which is why this asserts rather than guards: `sum % BASE`
+  // is in [0, 31], so `BASE - it` is in [1, 32], and the outer `% BASE` folds 32 back to
+  // 0 — leaving [0, 31] over a 32-symbol alphabet. A fallback here would be dead code
+  // that quietly changed every checksum if the arithmetic above were ever broken.
+  return ALPHABET[(BASE - (sum % BASE)) % BASE]!
 }
 
 /** Groups a 12-symbol body into the canonical `PVH-XXXX-XXXX-XXXX` rendering. */

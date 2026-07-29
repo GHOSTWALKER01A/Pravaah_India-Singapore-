@@ -9,7 +9,7 @@ import { DocumentShell } from "@/ui/layout/DocumentShell";
 export const metadata: Metadata = pageMetadata({
   title: "Rules",
   description:
-    "The plain-English rules of Pravaah: who can apply, what is required on each corridor, what happens when a check fails, how long data lives, and what you can always do.",
+    "The plain-English rules of MyPravaah: who can apply, what is required on each corridor, what happens when a check fails, how long data lives, and what you can always do.",
   path: ROUTES.LEGAL.RULES,
 });
 
@@ -36,7 +36,7 @@ export default function RulesPage(): ReactElement {
           bank account, or a Singpass account. Both is stronger than either.
         </li>
         <li>
-          You must apply for yourself. A Pravaah passport is a statement about
+          You must apply for yourself. A MyPravaah passport is a statement about
           one person, and it cannot be created on someone else&rsquo;s behalf.
         </li>
         <li>
@@ -131,36 +131,127 @@ export default function RulesPage(): ReactElement {
         supported by it. That is the trade, and it is yours to make.
       </p>
 
-      <h2>Rule 8 — You hold the credential</h2>
+      <h2>Rule 8 — A score is never shown without its reasons</h2>
       <p>
-        When the passport is issued, it is issued to you. You choose who sees it
-        and when. We do not operate a directory that lets institutions look you
-        up without your involvement.
+        There is no path in the product that gives you a number on its own. A
+        score arrives with the factors driving it, ranked, and with the specific
+        changes that would raise it. If your history is too thin to say anything
+        useful, you are told that — we would rather give you nothing than invent a
+        figure, because an invented figure is the exact harm this product exists
+        to undo.
+      </p>
+      <p>
+        A score also carries an honest confidence interval, and that interval
+        widens when the data behind it is thin. It is not decoration: it is the
+        product admitting how much it actually knows.
       </p>
 
-      <h2>Rule 9 — We never ask for banking credentials</h2>
+      <h2>Rule 9 — You hold the credential, and you disclose claim by claim</h2>
       <p>
-        Not your password, not your net-banking PIN, not an OTP read aloud to a
-        person. There is no field for any of them anywhere in the product,
-        because the Account Aggregator rail exists so that nobody needs one.
-        Treat anyone asking as an impostor, regardless of what they claim.
+        When the passport is issued, it is issued to you and bound to a key
+        generated on your own device. You choose who sees it and when, and you
+        choose <em>what</em> they see — each claim individually, not the credential
+        as a block. Anything you withhold is reported to the verifier as withheld
+        rather than read as a negative answer.
+      </p>
+      <p>
+        We do not operate a directory that lets institutions look you up without
+        your involvement. Every disclosure starts with a request you see and ends
+        with claims you ticked, and you can read afterwards exactly what left your
+        wallet.
+      </p>
+      <p>
+        You can revoke the passport itself. That is stronger than revoking a
+        consent: it stops verifying for everyone, everywhere, immediately —
+        including for anyone already holding a copy.
       </p>
 
-      <h2>Rule 10 — We do not overstate what is built</h2>
+      <h2>Rule 10 — We never ask for banking credentials</h2>
       <p>
-        Identity verification and consented data collection work end to end
-        today. Scoring, the issued passport, partner verification, money movement
-        and insurance are still being built, and are labelled as such everywhere
-        they appear on this site. The mobile app is not published in any app
-        store. If you find one claiming to be Pravaah today, it is not ours.
+        Not your password, not your net-banking PIN, not your UPI PIN, not an OTP
+        read aloud to a person. There is no field for any of them anywhere in the
+        product, because the Account Aggregator rail exists so that nobody needs
+        one, and the UPI PIN is entered in your bank&rsquo;s own secure component
+        where we cannot see it. Treat anyone asking as an impostor, regardless of
+        what they claim.
+      </p>
+      <p>
+        Where the app asks for a PIN of its own, it says so in the same sentence —
+        because a payment screen asking for &ldquo;your PIN&rdquo; without
+        qualification is indistinguishable from a phishing screen, and teaching
+        you to type it anywhere is itself the harm.
+      </p>
+
+      <h2>Rule 11 — What you were quoted is what settles</h2>
+      <p>
+        Every transfer is priced before you confirm it, and that price is frozen
+        and single-use. The rate and fee you agreed to are read back at settlement
+        rather than recalculated, so the amount that arrives is the amount you were
+        shown.
+      </p>
+      <p>
+        Money movement is recorded on a double-entry ledger, and your statement
+        shows the ledger lines — the reserve, the fee, a refund if there was one —
+        rather than a tidied summary. That is deliberate: it is the document that
+        answers you if you ever dispute a balance.
+      </p>
+
+      <h2>Rule 12 — A hold is a delay, and it is never an accusation</h2>
+      <p>
+        Some actions attract extra checks: a payment that is unusual for you, a
+        first payment to a new payee, a device we have not seen before, or one
+        whose SIM has recently been re-issued. You may be asked to confirm it is
+        you, or the action may be held for a person to look at.
+      </p>
+      <p>
+        At any threshold worth setting, most held actions belong to people who
+        have done nothing wrong — which is exactly why a hold is a delay and not a
+        refusal. Held actions go to a queue a human works, ordered
+        longest-waiting-first, and you are told what is happening in words that do
+        not imply you are a suspect. You can read every decision made about you,
+        including the ones that let you through.
+      </p>
+
+      <h2>Rule 13 — A higher price is an answer, not a rejection</h2>
+      <p>
+        Where cover is offered at a higher rate, you are told the reason and what
+        would change it. Where it is declined, that is an explained outcome rather
+        than an error, and you are told what would make it available. The point of
+        pricing on evidence is that the evidence can be argued with.
+      </p>
+
+      <h2>Rule 14 — We do not overstate what is built</h2>
+      <p>
+        All eight modules — identity, consent and data, scoring, the issued
+        passport, verification, payments, insurance and the fraud engine — are
+        built and verified end to end. That is the honest statement, and so is
+        this one: <strong>none of it is a live financial service.</strong> MyPravaah
+        holds no licences, so the regulated integrations run against provider
+        sandboxes, no real money has moved, and no insurance policy is in force.
+        The mobile app is not published in any app store; if you find one claiming
+        to be MyPravaah today, it is not ours. Both halves are set out in detail on{" "}
+        <Link href={ROUTES.WHAT_IS_BUILT}>What is built</Link>.
       </p>
 
       <h2>What you can always do</h2>
       <ul>
         <li>See exactly which consents are active and what each one covers.</li>
         <li>Revoke any consent, immediately, without a reason.</li>
+        <li>
+          See every check made against your passport and which claims it received.
+        </li>
+        <li>Revoke the passport, which stops it verifying for everyone at once.</li>
+        <li>
+          Read every security decision recorded about you, including the ones that
+          allowed an action.
+        </li>
+        <li>Remove a device, which ends its access to your account.</li>
         <li>Ask for a copy of what we hold about you.</li>
         <li>Ask us to correct something that is wrong.</li>
+        <li>
+          Ask a person to explain and reconsider any decision that went against
+          you.
+        </li>
         <li>Stop, at any point, and be no worse off than before you started.</li>
       </ul>
 

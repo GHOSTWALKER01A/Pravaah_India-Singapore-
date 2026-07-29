@@ -8,7 +8,11 @@
  * text" is `inkDim` on rag and `onFieldDim` on the intaglio field, and getting
  * that wrong is how you end up with gray text on a coloured ground.
  */
-import { Text as RNText, type TextProps as RNTextProps } from 'react-native';
+import {
+  Text as RNText,
+  useWindowDimensions,
+  type TextProps as RNTextProps,
+} from 'react-native';
 
 import { MaxScale, Type, platformFamily, usePalette } from '@/theme';
 import type { TypeRole } from '@/theme';
@@ -96,13 +100,43 @@ export function Text({
   const p = usePalette();
   const base = Type[role];
 
+  /**
+   * Scale `lineHeight` with the OS font size.
+   *
+   * React Native scales `fontSize` when the user raises their system font size, but it
+   * leaves an explicitly-set `lineHeight` exactly as written. Every role in `Type` sets
+   * one, so at a large font scale the glyphs outgrow their line boxes and MULTI-LINE text
+   * collapses into itself — lines overlapping each other and bleeding into whatever sits
+   * below.
+   *
+   * `denomination` is the worst case and the one that exposed this: 34pt text in a 38pt
+   * line box has only 4pt of slack, so it breaks at a font scale of about 1.12 — well
+   * inside what people actually use. It went unnoticed because single-line display text
+   * usually has room to spill into; the first component to wrap a denomination to three
+   * lines rendered them on top of one another.
+   *
+   * `fontScale` comes from `useWindowDimensions` rather than `PixelRatio.getFontScale()`
+   * because it is reactive — a user changing their font size mid-session re-renders.
+   * `MaxScale` is applied here too, so the line box tracks the CAPPED growth that
+   * `maxFontSizeMultiplier` actually permits rather than the uncapped OS value.
+   */
+  const { fontScale } = useWindowDimensions();
+  const cap = MaxScale[role];
+  const effectiveScale = cap ? Math.min(fontScale, cap) : fontScale;
+  const scaledLineHeight =
+    typeof base.lineHeight === 'number' && effectiveScale !== 1
+      ? { lineHeight: base.lineHeight * effectiveScale }
+      : null;
+
   return (
     <RNText
       // Only fixed-geometry roles are capped, and prose never is. See MaxScale.
-      maxFontSizeMultiplier={MaxScale[role]}
+      maxFontSizeMultiplier={cap}
       style={[
         base,
         { fontFamily: platformFamily(base.fontFamily) },
+        // Before `style`, so a caller can still pin its own lineHeight deliberately.
+        scaledLineHeight,
         { color: resolveTone(tone, surface, p) },
         center && { textAlign: 'center' },
         style,

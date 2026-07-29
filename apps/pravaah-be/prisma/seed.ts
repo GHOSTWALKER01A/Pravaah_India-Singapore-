@@ -24,6 +24,7 @@ import { PrismaPg } from '@prisma/adapter-pg'
 import { config } from 'dotenv'
 
 import {
+  AccountType,
   AdminRole,
   CheckStatus,
   CheckType,
@@ -36,14 +37,24 @@ import {
   DocType,
   FetchType,
   FiType,
+  Corridor,
   KycStatus,
+  LedgerDirection,
+  LedgerLeg,
   Prisma,
   PrismaClient,
+  PaymentRail,
+  QrKind,
+  TxnDirection,
+  TxnStatus,
+  TxnType,
+  UpiHandleStatus,
   ReviewDecision,
   ReviewStatus,
 } from '../generated/prisma/client'
 
 import { encryptField } from '../src/common/crypto/field-crypto.util'
+import { buildUpiIntent } from '../src/modules/payments/upi-qr.util'
 
 // M2 model catalogue + the pure scorecard math. Imported rather than duplicated:
 // the seeded fairness verdicts must be what a live audit recomputes, and two
@@ -766,7 +777,94 @@ async function main(): Promise<void> {
     console.log('   ⚠ Skipping M2 scoring seed (FIELD_ENCRYPTION_KEY unset)')
   }
 
+  // ==========================================================================
+  // M3 — A REGISTERED VERIFIER
+  // Without one, nothing can call /verify: the endpoint requires a partner key
+  // so that a presentation's audience cannot be self-declared. No encryption
+  // key needed — only a hash of the API key is stored.
+  // ==========================================================================
+  await seedVerifierPartner()
+
+  // ==========================================================================
+  // M5 — THE INSURANCE CATALOGUE
+  // Three covers, so the marketplace is not empty on first boot. No encryption
+  // key needed: a product carries no PII, only a rate and its terms.
+  // ==========================================================================
+  await seedInsuranceProducts()
+
+  // ==========================================================================
+  // M4 — MONEY
+  // The platform's ledger accounts, then a UPI address, a receive QR and an
+  // opening balance for each VERIFIED holder. Without this the Pay tab is
+  // structurally empty: no address to be paid at, no code to show, ₹0.00.
+  // ==========================================================================
+  await seedPaymentsLedger()
+
   console.log('✅ Seed complete')
+}
+
+// ============================================================================
+// M3 — THE PASSPORT
+// ============================================================================
+
+/**
+ * The DEV partner API key.
+ *
+ * Fixed rather than random, and that is the whole point of seeding one: only the
+ * sha256 of a key is ever stored, so a randomly-generated seed key would be
+ * unrecoverable and therefore useless. A known constant is what makes
+ * `docs/api-tests/m3-passport.http` runnable out of the box.
+ *
+ * It is prefixed `pvk_dev_` so it is obvious on sight in a log, a screenshot or a
+ * git diff that this is not a real credential. NEVER seed a production database:
+ * the hash is public in this file, so anyone reading the repo could call /verify
+ * as this partner.
+ */
+const DEV_PARTNER_API_KEY = 'pvk_dev_acme_bank_do_not_use_in_production'
+
+/**
+ * One verifier, so the M3 loop is exercisable on first boot.
+ *
+ * `audience` is the load-bearing field: it is the identifier that must appear as
+ * the `aud` inside every key binding proof made out to this verifier, and binding
+ * a presentation to ONE audience is what stops it being replayed at a different
+ * one. It is upserted on `audience` rather than a UUID for exactly that reason —
+ * the audience IS the partner's identity, and re-seeding must not mint a second
+ * row that could accept presentations meant for the first.
+ */
+async function seedVerifierPartner(): Promise<void> {
+  const apiKeyHash = createHash('sha256')
+    .update(DEV_PARTNER_API_KEY)
+    .digest('hex')
+
+  const partner = await prisma.verifierPartner.upsert({
+    where: { audience: 'acme-bank' },
+    // The hash is refreshed on re-seed so a local database always matches the
+    // constant above. The API itself never overwrites a partner's key — a
+    // rotation issues a new one — so this is a dev-seed affordance, not the
+    // service's behaviour.
+    update: {
+      name: 'Acme Bank (dev)',
+      apiKeyHash,
+      contactEmail: 'risk@acme.example',
+      country: 'SG',
+      isActive: true,
+    },
+    create: {
+      name: 'Acme Bank (dev)',
+      audience: 'acme-bank',
+      apiKeyHash,
+      contactEmail: 'risk@acme.example',
+      country: 'SG',
+      isActive: true,
+    },
+  })
+
+  console.log(
+    `   ✔ M3 verifier → ${partner.name} · audience "${partner.audience}"`,
+  )
+  console.log(`       x-pravaah-partner-key: ${DEV_PARTNER_API_KEY}`)
+  console.log('       ⚠ dev-only — this key is public in prisma/seed.ts')
 }
 
 async function seedAaConsent(): Promise<void> {
@@ -1446,6 +1544,173 @@ function fairnessReports(
   return out
 }
 
+// ============================================================================
+// M5 — MICRO-INSURANCE CATALOGUE
+// ============================================================================
+
+/**
+ * The three covers, with fixed UUIDs so re-running the seed upserts rather than
+ * accumulating duplicates.
+ *
+ * Every number here is a product decision, not a placeholder, so each one is
+ * justified next to it. The base rates are the important ones: they are annual,
+ * in basis points OF COVERAGE, and a quote multiplies them by the applicant's
+ * reputation multiplier. So `baseRateBps: 900` on income protection means a
+ * STANDARD-risk applicant pays 9% of their sum insured per year — roughly ₹150 a
+ * month for ₹20,000 of cover, which is the price point this population can
+ * actually sustain out of a daily wage.
+ *
+ * The waiting periods are the anti-adverse-selection controls and they are NOT
+ * uniform: 30 days on income protection (a wage loss is easy to foresee), 60 on
+ * health (a planned procedure is easier still), and 0 on travel — the only
+ * product where a zero wait is defensible, because the cover is a single trip
+ * bought before departure and there is no window in which to sit on a known loss.
+ */
+const INSURANCE_PRODUCT_SEEDS = [
+  {
+    id: '8f3a1c20-0000-4000-8000-000000000001',
+    type: 'INCOME_PROTECTION' as const,
+    name: 'Income Protection — Daily Wage',
+    tagline:
+      'For daily-wage and gig workers. A buffer for the weeks you cannot work, priced from the income history you have already shared.',
+    currency: 'INR',
+    // 9% of cover per year at standard risk. A PREFERRED applicant pays 6.3%.
+    baseRateBps: 900,
+    /** ₹5,000 — small enough to be worth buying on a ₹500/day wage. */
+    minCoverMinor: 500_000n,
+    /** ₹50,000 — roughly three months of wages, the loss this cover is for. */
+    maxCoverMinor: 5_000_000n,
+    termDays: 365,
+    waitingPeriodDays: 30,
+    freeLookDays: 15,
+    exclusions: [
+      'Loss of income from voluntarily leaving a job or being dismissed for misconduct.',
+      'Days you were able to work but chose not to.',
+      'Loss of income caused by injury while under the influence of alcohol or drugs.',
+      'Any incident that happened before your cover started or inside your waiting period.',
+      'Loss of income from self-inflicted injury.',
+    ],
+  },
+  {
+    id: '8f3a1c20-0000-4000-8000-000000000002',
+    type: 'HEALTH_TOPUP' as const,
+    name: 'Health Top-up',
+    tagline:
+      'Sits on top of any cover you already have — including ESIC or a state scheme — for the hospital bill it does not fully pay.',
+    currency: 'INR',
+    // 4.5%: cheaper than income protection because it pays only ABOVE a base
+    // cover, so the frequent small claims are somebody else's.
+    baseRateBps: 450,
+    /** ₹10,000. */
+    minCoverMinor: 1_000_000n,
+    /** ₹1,00,000. */
+    maxCoverMinor: 10_000_000n,
+    termDays: 365,
+    // Longer than income protection: a planned procedure is the easiest loss of
+    // all to foresee, and 60 days is the standard market answer to it.
+    waitingPeriodDays: 60,
+    freeLookDays: 15,
+    exclusions: [
+      'Any condition you were already being treated for when the cover started.',
+      'Cosmetic or elective procedures.',
+      'Dental and vision care unless caused by an accident.',
+      'Costs your base cover or a state scheme has already paid.',
+      'Treatment taken outside India or Singapore.',
+      'Any hospital admission inside your 60-day waiting period.',
+    ],
+  },
+  {
+    id: '8f3a1c20-0000-4000-8000-000000000003',
+    type: 'TRAVEL_ACCIDENT' as const,
+    name: 'Corridor Travel & Accident',
+    tagline:
+      'For the India–Singapore trip itself: travel mishaps and personal accident, for the days you are actually travelling.',
+    // SGD, deliberately. It is bought at the Singapore end of the corridor, and a
+    // holder paying premium from an SGD wallet must not be sold an INR policy that
+    // would then pay a claim in a currency they cannot spend where they are.
+    currency: 'SGD',
+    // 12% annualised looks high and is not: the premium is pro-rated to the term,
+    // so a 30-day policy costs about 1% of cover. Accident cover is priced per
+    // day of exposure, not per year.
+    baseRateBps: 1_200,
+    /** S$500. */
+    minCoverMinor: 50_000n,
+    /** S$10,000. */
+    maxCoverMinor: 1_000_000n,
+    // 30 days of travel. The premium is charged ONE_TIME because a monthly
+    // premium on a 30-day policy would bill after the cover had ended.
+    termDays: 30,
+    /**
+     * Zero, and this is the only product where that is defensible.
+     *
+     * The cover is a single trip bought before departure, so there is no window in
+     * which to buy after a known loss — the incident has to happen during the term
+     * and the term starts at purchase. A waiting period here would sell somebody
+     * cover for a trip and then decline the accident.
+     */
+    waitingPeriodDays: 0,
+    // Short, because the term is short: a 15-day free look on a 30-day policy
+    // would be a free option on half the cover.
+    freeLookDays: 3,
+    exclusions: [
+      'Injuries from adventure sports or professional athletics.',
+      'Any claim where you were travelling against medical advice.',
+      'Loss of unattended baggage.',
+      'Incidents outside the India–Singapore corridor.',
+      'Anything that happened before the policy term started or after it ended.',
+    ],
+  },
+]
+
+/**
+ * The non-advice disclaimer stored on each product.
+ *
+ * Duplicated as a literal here rather than imported from `@pravaah/schema`, and
+ * deliberately: this seed runs through `tsx` against the SOURCE tree, and the
+ * schema package is a built CJS artefact whose `dist` may not exist on a fresh
+ * clone. A seed that failed on a missing build would block the first-run
+ * experience for a value that never changes. The API layer serves the canonical
+ * copy from `INSURANCE_NON_ADVICE_DISCLAIMER` on every priced response, so a
+ * client never depends on this column being current.
+ */
+const SEED_DISCLAIMER =
+  'Pravaah provides information, not medical or financial advice. Cover, exclusions, waiting periods and claim decisions are governed by the insurer’s policy wording. Your premium is calculated from the financial data you consented to share; it is not a judgement about you as a person. This cover is bound against a demonstration insurer — production requires an IRDAI-regulated insurer partner.'
+
+async function seedInsuranceProducts(): Promise<void> {
+  for (const product of INSURANCE_PRODUCT_SEEDS) {
+    const data = {
+      type: product.type,
+      name: product.name,
+      tagline: product.tagline,
+      currency: product.currency,
+      baseRateBps: product.baseRateBps,
+      minCoverMinor: product.minCoverMinor,
+      maxCoverMinor: product.maxCoverMinor,
+      termDays: product.termDays,
+      waitingPeriodDays: product.waitingPeriodDays,
+      freeLookDays: product.freeLookDays,
+      exclusions: product.exclusions as Prisma.InputJsonValue,
+      disclaimer: SEED_DISCLAIMER,
+      isActive: true,
+    }
+
+    await prisma.insuranceProduct.upsert({
+      where: { id: product.id },
+      // Update on re-run, so a corrected rate or a reworded exclusion lands
+      // rather than being silently skipped by a create-if-absent seed.
+      update: data,
+      create: { id: product.id, ...data },
+    })
+  }
+
+  console.log(
+    `   ✔ M5 insurance catalogue → ${INSURANCE_PRODUCT_SEEDS.length} products (${INSURANCE_PRODUCT_SEEDS.map((p) => p.type).join(', ')})`,
+  )
+  console.log(
+    '       waiting periods: 30d income · 60d health · 0d travel (single-trip)',
+  )
+}
+
 /**
  * Deterministic PRNG (mulberry32). `Math.random()` would make the cohort — and
  * therefore the seeded fairness verdicts — different on every machine, which is
@@ -1476,3 +1741,311 @@ main()
     await prisma.$disconnect()
     process.exit(1)
   })
+
+// ============================================================================
+// M4 — MONEY
+// ============================================================================
+
+/**
+ * The ledger, a UPI address, a receive code and an opening balance.
+ *
+ * Without this the Pay tab is structurally empty rather than merely unpopulated: no address to be
+ * paid at, no QR to show, and ₹0.00 — because a wallet balance is DERIVED from ledger entries, so a
+ * holder with no entries has no balance by construction.
+ *
+ * Everything here is built the way the services build it, deliberately:
+ *
+ *  - The QR payload comes from `buildUpiIntent`, the same function `QrService.create` calls, so a
+ *    seeded code scans identically to a minted one. A hand-written `upi://pay?...` string would look
+ *    correct in the database and fail in a scanner.
+ *  - The opening balance is posted as a BALANCED pair of entries — a debit against the platform
+ *    nostro and a credit to the wallet. Not a `balanceMinor` column, because there isn't one: a
+ *    balance is `SUM(credits) - SUM(debits)`. A single-sided entry would seed a broken trial
+ *    balance, which is the one figure the admin console treats as an alarm rather than a metric.
+ *  - The handle is ACTIVE with `verifiedAt` set, matching what `allocate` produces.
+ *
+ * Idempotent on stable keys like the rest of this file: platform accounts on
+ * `(ownerType, ownerId, type, currency)`, the handle on its unique `vpa`, the QR on its unique
+ * `ref`, and the opening pair on a fixed `legRef` so re-running cannot double anybody's money.
+ */
+async function seedPaymentsLedger(): Promise<void> {
+  console.log('   → M4 payments: ledger, addresses, receive codes')
+
+  /**
+   * The platform's own accounts.
+   *
+   * `ownerId` is the empty string rather than null, because Postgres treats NULLs as distinct: a
+   * nullable column in the unique key would let a second SUSPENSE account exist, and money would
+   * silently split across two of them.
+   */
+  const platform: {
+    type: AccountType
+    currency: string
+    label: string
+    allowNegative: boolean
+  }[] = [
+    // Negative by design: the nostro is the platform's funding source, so seeding money into a
+    // wallet necessarily drives it negative. Every other account must never go below zero.
+    {
+      type: AccountType.PLATFORM_NOSTRO,
+      currency: 'INR',
+      label: 'Platform nostro · INR',
+      allowNegative: true,
+    },
+    {
+      type: AccountType.PLATFORM_NOSTRO,
+      currency: 'SGD',
+      label: 'Platform nostro · SGD',
+      allowNegative: true,
+    },
+    {
+      type: AccountType.SUSPENSE,
+      currency: 'INR',
+      label: 'Suspense · INR',
+      allowNegative: false,
+    },
+    {
+      type: AccountType.SUSPENSE,
+      currency: 'SGD',
+      label: 'Suspense · SGD',
+      allowNegative: false,
+    },
+    {
+      type: AccountType.PLATFORM_FEE,
+      currency: 'INR',
+      label: 'Fees · INR',
+      allowNegative: false,
+    },
+    {
+      type: AccountType.FX_POSITION,
+      currency: 'INR',
+      label: 'FX position · INR',
+      allowNegative: true,
+    },
+    {
+      type: AccountType.FX_POSITION,
+      currency: 'SGD',
+      label: 'FX position · SGD',
+      allowNegative: true,
+    },
+    {
+      type: AccountType.RECEIVABLE,
+      currency: 'INR',
+      label: 'Receivable · INR',
+      allowNegative: false,
+    },
+  ]
+
+  for (const account of platform) {
+    const existing = await prisma.ledgerAccount.findFirst({
+      where: {
+        ownerType: 'PLATFORM',
+        ownerId: '',
+        type: account.type,
+        currency: account.currency,
+      },
+    })
+    if (existing) continue
+    await prisma.ledgerAccount.create({
+      data: {
+        ownerType: 'PLATFORM',
+        ownerId: '',
+        type: account.type,
+        currency: account.currency,
+        label: account.label,
+        allowNegative: account.allowNegative,
+      },
+    })
+  }
+  console.log(`     ✔ ${platform.length} platform ledger accounts`)
+
+  // VERIFIED holders only. `UpiHandleService.allocate` refuses an address to an unverified identity
+  // because a payable address on an unverified account is a mule; seeding one would contradict the
+  // rule the product enforces at runtime.
+  const holders = await prisma.user.findMany({
+    where: { kycStatus: KycStatus.VERIFIED },
+    select: {
+      id: true,
+      primaryCountry: true,
+      pravaahId: true,
+      kycProfile: { select: { verifiedName: true } },
+    },
+  })
+
+  for (const holder of holders) {
+    const currency = holder.primaryCountry === Country.SINGAPORE ? 'SGD' : 'INR'
+    const payeeName = holder.kycProfile?.verifiedName ?? 'Pravaah user'
+
+    // ── the wallet account ──────────────────────────────────────────────────
+    let wallet = await prisma.ledgerAccount.findFirst({
+      where: {
+        ownerType: 'USER',
+        ownerId: holder.id,
+        type: AccountType.USER_WALLET,
+        currency,
+      },
+    })
+    wallet ??= await prisma.ledgerAccount.create({
+      data: {
+        ownerType: 'USER',
+        ownerId: holder.id,
+        type: AccountType.USER_WALLET,
+        currency,
+        label: `Wallet · ${payeeName}`,
+        allowNegative: false,
+      },
+    })
+
+    // ── the address ─────────────────────────────────────────────────────────
+    // Same derivation as `vpaCandidates`: the verified name, punctuation collapsed to dots.
+    const localPart = (payeeName || holder.pravaahId || holder.id)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '.')
+      .replace(/^\.+|\.+$/g, '')
+      .slice(0, 24)
+    const vpa = `${localPart.length >= 2 ? localPart : 'holder'}@pravaah`
+
+    const handle = await prisma.upiHandle.upsert({
+      where: { vpa },
+      update: {
+        status: UpiHandleStatus.ACTIVE,
+        verifiedAt: new Date(),
+        isPrimary: true,
+      },
+      create: {
+        userId: holder.id,
+        vpa,
+        suffix: 'pravaah',
+        // ACTIVE, matching `allocate`. A PENDING handle can neither receive nor carry a QR.
+        status: UpiHandleStatus.ACTIVE,
+        verifiedAt: new Date(),
+        isPrimary: true,
+      },
+    })
+
+    // ── the receive code ────────────────────────────────────────────────────
+    /**
+     * STATIC, and unsigned.
+     *
+     * A static QR carries no amount, so the payer types it — which is what makes one code reusable
+     * forever and printable on a shopfront. Only a DYNAMIC code is signed, because only a dynamic
+     * code is a payment instruction with an amount that must not be editable.
+     *
+     * `ref` is derived from the user id rather than random, so the upsert is stable across runs. In
+     * production `QrService` uses 128 bits of entropy because a publicly printed reference must not
+     * be enumerable; a fixed dev ref is fine and is visibly a seed value.
+     */
+    const ref = `PQRseed${holder.id.replace(/-/g, '').slice(0, 18)}`
+    const payload = buildUpiIntent({
+      payeeAddress: handle.vpa,
+      payeeName,
+      currency,
+      txnRef: ref,
+    })
+
+    await prisma.paymentQr.upsert({
+      where: { ref },
+      update: { payload, vpa: handle.vpa, isActive: true },
+      create: {
+        userId: holder.id,
+        kind: QrKind.STATIC,
+        ref,
+        payload,
+        vpa: handle.vpa,
+        amountMinor: null,
+        currency,
+        purposeCode: 'P2P_TRANSFER',
+        isActive: true,
+      },
+    })
+
+    // ── an opening balance, as a BALANCED posting pair ──────────────────────
+    /**
+     * Two entries, never one.
+     *
+     * A wallet balance is `SUM(credits) - SUM(debits)` over `LedgerEntry`; there is no column to
+     * set. And the trial balance is the sum of every entry in the table, so a single-sided credit
+     * would seed a permanently broken ledger and page whoever opened the console first.
+     *
+     * The fixed `legRef` is what makes this idempotent — re-running the seed cannot double anybody's
+     * opening balance.
+     */
+    const nostro = await prisma.ledgerAccount.findFirstOrThrow({
+      where: {
+        ownerType: 'PLATFORM',
+        ownerId: '',
+        type: AccountType.PLATFORM_NOSTRO,
+        currency,
+      },
+    })
+
+    // 25,000.00 in minor units. Enough to exercise the limits and the Indian 2,2,3 grouping without
+    // looking like a production figure.
+    const openingMinor = 2_500_000n
+    const legRef = `seed-opening-${holder.id}`
+
+    const alreadyPosted = await prisma.ledgerEntry.findFirst({
+      where: { legRef, accountId: wallet.id },
+    })
+    if (!alreadyPosted) {
+      /**
+       * The entries need a transaction, and that requirement is the schema being right.
+       *
+       * `LedgerEntry.transactionId` is non-nullable, so there is no such thing as an orphan
+       * posting: every movement of money traces to something that happened. An opening balance is
+       * no exception — it is a TOPUP that settled — so the seed creates the real row rather than
+       * relaxing the column.
+       *
+       * `idempotencyKey` is unique and derived from the holder, which is what makes re-running the
+       * seed a no-op instead of a second deposit.
+       */
+      const opening = await prisma.transaction.upsert({
+        where: { idempotencyKey: legRef },
+        update: {},
+        create: {
+          userId: holder.id,
+          type: TxnType.TOPUP,
+          direction: TxnDirection.INBOUND,
+          corridor: Corridor.DOMESTIC,
+          rail: PaymentRail.INTERNAL,
+          status: TxnStatus.SUCCESS,
+          sourceCurrency: currency,
+          destCurrency: currency,
+          sourceAmount: openingMinor,
+          destAmount: openingMinor,
+          totalDebitMinor: openingMinor,
+          counterpartyHandle: 'seed@pravaah',
+          purposeCode: 'WALLET_TOPUP',
+          idempotencyKey: legRef,
+          provider: 'seed',
+          completedAt: new Date(),
+        },
+      })
+
+      await prisma.ledgerEntry.createMany({
+        data: [
+          {
+            transactionId: opening.id,
+            accountId: nostro.id,
+            direction: LedgerDirection.DEBIT,
+            leg: LedgerLeg.TOPUP,
+            legRef,
+            amountMinor: openingMinor,
+            currency,
+          },
+          {
+            transactionId: opening.id,
+            accountId: wallet.id,
+            direction: LedgerDirection.CREDIT,
+            leg: LedgerLeg.TOPUP,
+            legRef,
+            amountMinor: openingMinor,
+            currency,
+          },
+        ],
+      })
+    }
+
+    console.log(`     ✔ ${payeeName} → ${handle.vpa} · code ${ref}`)
+  }
+}

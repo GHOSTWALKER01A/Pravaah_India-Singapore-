@@ -1,0 +1,754 @@
+########################################################################
+# PRAVAAH · M5 — Micro-Insurance (usage-based cover · reputation-priced · claims)
+#
+# VS Code "REST Client" / JetBrains HTTP client.  Base = /api/v1/...
+#
+# M4 proved the platform can move money. M5 proves the reputation is worth
+# more than one product: the SAME consented behaviour (M1) and the SAME
+# explainable score (M2) price micro-insurance for a population insurers
+# price blindly or refuse — then collect premium and pay claims over the
+# SAME double-entry ledger.
+#
+# ─── READ THIS BEFORE SENDING ANYTHING ────────────────────────────────────
+#
+# 1. PRICING IS PERSONAL, SO THE MARKETPLACE SHOWS NO PRICES.
+#    `GET /insurance/products` returns cover bands and terms, never a
+#    premium. A premium only exists once somebody has been underwritten,
+#    because the whole point is that two applicants pay different amounts
+#    for identical cover. §10 is where the number appears.
+#
+# 2. A POLICY CAN ONLY BE BOUGHT FROM A QUOTE.
+#    Same discipline as M4's FX quote, different reason: an FX quote freezes
+#    a market rate, an insurance quote freezes an UNDERWRITING DECISION.
+#    Between quoting and buying, a score can be recomputed or an admin can
+#    reprice the product — and the person must be sold the cover they were
+#    shown, at the price they were shown, on the evidence that produced it.
+#
+# 3. AMOUNTS ARE INTEGER MINOR-UNIT STRINGS.
+#    `"2000000"` is ₹20,000.00 — paise, never rupees. Sent as strings
+#    because `JSON.parse` turns any numeric literal into a float before a
+#    line of our code runs.
+#
+# 4. BUYING NEEDS AN `Idempotency-Key`.
+#    A retried purchase returns the SAME policy, never a second debit.
+#
+# 5. THE PREMIUM COMES FROM THE PRAVAAH WALLET.
+#    Not from a card and not from a fresh UPI collect. So §20 will FAIL with
+#    a shortfall until the wallet has money — run the M4 topup (§05 of
+#    m4-payments.http) first. That failure is the honest path, not a bug:
+#    cover is bound only once a premium has actually SETTLED on the ledger.
+#
+# ─── PREREQUISITES ────────────────────────────────────────────────────────
+#
+#   • `npm run prisma:push && npm run prisma:seed` — the seed creates the
+#     three products (Income Protection, Health Top-up, Travel & Accident).
+#   • A VERIFIED user (M0) with an ACTIVE AA consent (M1) and a COMPUTED
+#     score (M2). Without a score you are still quoted — see §11, the
+#     thin-file path — but the reputation contrast needs one.
+#   • Wallet balance in the product's currency (M4 §05 + §06).
+#
+# ─── THE SHOWPIECE ────────────────────────────────────────────────────────
+#
+#   §11  the SAME cover quoted to two different bands. That contrast — one
+#        applicant paying ~₹97/mo and another ~₹205/mo for identical
+#        ₹20,000 cover — is the entire product in one screenshot.
+#   §41  a FORGED document. `{"tamper": true}` scores 0.92 and the claim is
+#        hard-routed to a human instead of auto-paid, no matter how small.
+#   §62  the loss ratio, read off the LEDGER rather than from application
+#        tables — so it reconciles against M4's trial balance (§90 there).
+#
+#   No-database proof of all five claims:  npm run verify:insurance
+########################################################################
+
+@baseUrl = http://localhost:8000/api/v1
+@token = PASTE_USER_ACCESS_TOKEN
+@adminToken = PASTE_ADMIN_ACCESS_TOKEN
+
+# The seeded product ids. Fixed UUIDs, so these are stable across re-seeds.
+@incomeProtectionId = 8f3a1c20-0000-4000-8000-000000000001
+@healthTopupId = 8f3a1c20-0000-4000-8000-000000000002
+@travelAccidentId = 8f3a1c20-0000-4000-8000-000000000003
+
+# Filled in as you go.
+@quoteId = PASTE_QUOTE_ID
+@policyId = PASTE_POLICY_ID
+@claimId = PASTE_CLAIM_ID
+@docId = PASTE_CLAIM_DOCUMENT_ID
+
+
+########################################################################
+# 01 · THE MARKETPLACE
+########################################################################
+
+### 01 — every active product. Cover bands and terms, deliberately no prices.
+GET {{baseUrl}}/insurance/products
+Authorization: Bearer {{token}}
+
+### 02 — filter to one currency.
+# A Singapore-resident holder paying premium from an SGD wallet must not be
+# offered an INR policy that would then pay a claim in a currency they cannot
+# spend where they are.
+GET {{baseUrl}}/insurance/products?currency=SGD
+Authorization: Bearer {{token}}
+
+### 03 — one product, with its exclusions in plain words and its disclaimer.
+GET {{baseUrl}}/insurance/products/{{incomeProtectionId}}
+Authorization: Bearer {{token}}
+
+
+########################################################################
+# 10 · THE QUOTE — the reputation moment
+########################################################################
+
+### 10 — ask for a price on ₹20,000 of income protection.
+#
+# The response carries, in one payload:
+#   • `premium`            — what you pay, per period
+#   • `standardPremium`    — what a STANDARD-risk applicant pays for the
+#                            same cover
+#   • `savingsPercent`     — the difference, which IS the product's pitch
+#   • `riskTier` + `explanation[]` — why, in sentences a person can contest
+#   • `waitingPeriodDays`  — extended for a SUBSTANDARD risk
+#   • `exclusions[]` + `disclaimer` — the non-advice stance, on every priced
+#                            response rather than on a screen that might
+#                            forget it
+POST {{baseUrl}}/insurance/quote
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "productId": "{{incomeProtectionId}}",
+  "coverageMinor": "2000000"
+}
+
+### 11 — THE SHOWPIECE: the same request, from a different band.
+#
+# Run §10 as the seeded VERY_GOOD user, then again as the FAIR user. Identical
+# `coverageMinor`, materially different `premium`, and `explanation[]` says why
+# in both cases. That contrast is what an insurer judge is looking for, because
+# it is the thing no insurer can currently do for this population.
+#
+# `npm run verify:insurance` proves the same four bands separate, with no
+# database involved.
+POST {{baseUrl}}/insurance/quote
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "productId": "{{incomeProtectionId}}",
+  "coverageMinor": "2000000"
+}
+
+### 12 — a POOR band is DECLINED, politely, with a route back.
+#
+# 200, not 4xx. The decline is a recorded quote with `riskTier: "DECLINE"`, a
+# `declineReason` in plain language, and a pointer to M2's improvement tips —
+# because "not eligible" with no reason is the experience this population
+# already gets everywhere, and repeating it while holding their consented data
+# would be worse than not offering the product.
+POST {{baseUrl}}/insurance/quote
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "productId": "{{incomeProtectionId}}",
+  "coverageMinor": "2000000"
+}
+
+### 13 — cover outside the product's band → 400, with the band in the message.
+POST {{baseUrl}}/insurance/quote
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "productId": "{{incomeProtectionId}}",
+  "coverageMinor": "99999999"
+}
+
+### 14 — a SUBSTANDARD applicant asking for the maximum hits the TIER ceiling.
+# The one adverse-selection control whose input the applicant chooses, which is
+# exactly why the cap is applied server-side and the reduced ceiling is stated
+# rather than the request silently clamped.
+POST {{baseUrl}}/insurance/quote
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "productId": "{{incomeProtectionId}}",
+  "coverageMinor": "5000000"
+}
+
+### 15 — read a quote back. Note `validUntil` — 30 minutes.
+GET {{baseUrl}}/insurance/quotes/{{quoteId}}
+Authorization: Bearer {{token}}
+
+### 16 — a TRAVEL quote. One-time premium, pro-rated to a 30-day term.
+# Not a full year's premium on a fortnight of cover: accident cover is priced
+# per day of exposure.
+POST {{baseUrl}}/insurance/quote
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "productId": "{{travelAccidentId}}",
+  "coverageMinor": "100000"
+}
+
+
+########################################################################
+# 20 · BUY — premium on the live M4 ledger
+########################################################################
+
+### 20 — buy the cover. Change the key when you mean a NEW purchase.
+#
+# `expectedPremiumMinor` is a cross-check, not an instruction: the server never
+# charges this number, it refuses to proceed when the quote disagrees. A client
+# showing a stale screen is rejected rather than silently charged the
+# correct-but-unseen figure — which matters more here than on a transfer,
+# because this is a figure the holder will be debited every month.
+POST {{baseUrl}}/insurance/policies
+Authorization: Bearer {{token}}
+Idempotency-Key: buy-policy-001
+Content-Type: application/json
+
+{
+  "quoteId": "{{quoteId}}",
+  "expectedPremiumMinor": "15000",
+  "acceptedDisclaimer": true
+}
+
+### 21 — REPLAY. Same key, same body → the SAME policy, no second debit.
+POST {{baseUrl}}/insurance/policies
+Authorization: Bearer {{token}}
+Idempotency-Key: buy-policy-001
+Content-Type: application/json
+
+{
+  "quoteId": "{{quoteId}}",
+  "expectedPremiumMinor": "15000",
+  "acceptedDisclaimer": true
+}
+
+### 22 — a stale premium → 409. The client was showing an old screen.
+POST {{baseUrl}}/insurance/policies
+Authorization: Bearer {{token}}
+Idempotency-Key: buy-policy-stale-001
+Content-Type: application/json
+
+{
+  "quoteId": "{{quoteId}}",
+  "expectedPremiumMinor": "9999",
+  "acceptedDisclaimer": true
+}
+
+### 23 — the disclaimer cannot be defaulted through → 400.
+# `acceptedDisclaimer` is `z.literal(true)` with no default. An insurance
+# purchase where the non-advice disclaimer could be skipped is a purchase
+# nobody acknowledged.
+POST {{baseUrl}}/insurance/policies
+Authorization: Bearer {{token}}
+Idempotency-Key: buy-policy-nodisc-001
+Content-Type: application/json
+
+{
+  "quoteId": "{{quoteId}}",
+  "expectedPremiumMinor": "15000"
+}
+
+### 24 — an EMPTY WALLET leaves the policy PENDING_PAYMENT, not ACTIVE.
+#
+# The honest path, and the most important assertion in this file: cover is bound
+# only once the premium has SETTLED on the ledger. The response carries the
+# shortfall so the app can say how much to add. An implementation that activated
+# on intent would be insuring people who never paid — and would discover it at
+# claim time, which is the worst possible moment for both sides.
+POST {{baseUrl}}/insurance/policies
+Authorization: Bearer {{token}}
+Idempotency-Key: buy-policy-broke-001
+Content-Type: application/json
+
+{
+  "quoteId": "{{quoteId}}",
+  "expectedPremiumMinor": "15000",
+  "acceptedDisclaimer": true
+}
+
+### 25 — top the wallet up (M4 §05/§06), then retry the FIRST premium.
+#
+# Its own route rather than a repeat of §20: the policy already exists at the
+# agreed price, so re-buying would send the holder back through underwriting at
+# a price that may have moved. Nobody should be repriced for having had an empty
+# wallet on the day they decided to buy cover.
+POST {{baseUrl}}/insurance/policies/{{policyId}}/retry-premium
+Authorization: Bearer {{token}}
+Idempotency-Key: retry-premium-001
+Content-Type: application/json
+
+{}
+
+
+########################################################################
+# 30 · THE POLICY WALLET
+########################################################################
+
+### 30 — my policies. Lapsed and expired ones INCLUDED by default.
+# Hiding a lapsed policy is how somebody discovers they were uninsured at claim
+# time. `activeOnly=true` is available and is not the default, on purpose.
+GET {{baseUrl}}/insurance/policies
+Authorization: Bearer {{token}}
+
+### 31 — one policy, with its waiting-period countdown and next premium date.
+GET {{baseUrl}}/insurance/policies/{{policyId}}
+Authorization: Bearer {{token}}
+
+### 32 — the premium ledger for this policy. Each period, and what happened.
+GET {{baseUrl}}/insurance/policies/{{policyId}}/premiums
+Authorization: Bearer {{token}}
+
+### 33 — cancel inside the free-look window → a FULL premium refund.
+#
+# IRDAI requires a real insurer to honour this. Inside `freeLookEndsAt` the
+# premium comes back over the M4 ledger on its own `PREMIUM_REFUND` leg; outside
+# it, cover simply ends. The server decides which from the policy's dates — a
+# refund flag on the request body would be a request for money the caller does
+# not get to make.
+POST {{baseUrl}}/insurance/policies/{{policyId}}/cancel
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "reason": "Changed my mind after reading the exclusions"
+}
+
+
+########################################################################
+# 40 · CLAIMS — OCR, the fraud gate, and the payout
+########################################################################
+
+### 40 — file a claim.
+#
+# Every guard runs BEFORE a row exists: the policy must be live, the incident
+# must fall after the waiting period and inside the term, the amount must fit
+# the REMAINING cover (an aggregate limit, not a per-claim one), and the
+# `(policyId, dedupeHash)` unique index stops a duplicate that two concurrent
+# submissions would otherwise both create.
+POST {{baseUrl}}/insurance/claims
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "policyId": "{{policyId}}",
+  "amountClaimedMinor": "40000",
+  "incidentDate": "2026-07-20T00:00:00.000Z",
+  "description": "Fell at the site and could not work for eleven days. Treated at the district hospital."
+}
+
+### 41 — attach a CLEAN document.
+#
+# The dev OCR provider reads a JSON envelope so the pipeline is deterministic
+# and CI-safe. A real vendor reads pixels; the CONTRACT — fields, amountMinor,
+# tamperScore, confidence — is identical, which is what makes the swap one
+# registry entry.
+POST {{baseUrl}}/insurance/claims/{{claimId}}/documents
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=----pravaah
+
+------pravaah
+Content-Disposition: form-data; name="docType"
+
+PAYSLIP
+------pravaah
+Content-Disposition: form-data; name="document"; filename="payslip.json"
+Content-Type: application/json
+
+{ "amount": "400.00", "fields": { "employer": "Sunrise Constructions", "days_lost": "11" } }
+------pravaah--
+
+### 42 — THE SHOWPIECE: a FORGED document.
+#
+# `{"tamper": true}` scores 0.92 forgery likelihood. The document comes back
+# `SUSPECT` and the claim can no longer auto-approve, however small and however
+# otherwise-clean — the tamper score is a HARD GATE, not a weight that other
+# favourable signals could outweigh. A forged document is not a probabilistic
+# concern; it is evidence the claim is a fabrication.
+POST {{baseUrl}}/insurance/claims/{{claimId}}/documents
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=----pravaah
+
+------pravaah
+Content-Disposition: form-data; name="docType"
+
+MEDICAL_BILL
+------pravaah
+Content-Disposition: form-data; name="document"; filename="bill.json"
+Content-Type: application/json
+
+{ "amount": "400.00", "tamper": true, "fields": { "hospital": "District Hospital" } }
+------pravaah--
+
+### 43 — a BLURRY document is not a forgery.
+#
+# `confidence` 0.4 → stays `UPLOADED` with a prompt to retake, rather than
+# `SUSPECT`. Conflating the two would accuse somebody with a cracked phone
+# camera of fraud — and that person is the one most likely to need the claim.
+POST {{baseUrl}}/insurance/claims/{{claimId}}/documents
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=----pravaah
+
+------pravaah
+Content-Disposition: form-data; name="docType"
+
+MEDICAL_BILL
+------pravaah
+Content-Disposition: form-data; name="document"; filename="bill.json"
+Content-Type: application/json
+
+{ "amount": "400.00", "blurry": true }
+------pravaah--
+
+### 44 — "I'm done uploading" → run the fraud gate.
+#
+# A separate call from §40 because documents arrive as separate multipart
+# requests: scoring at submission would assess every claim as though it had
+# none. This is where the M6 hook runs and where a small, clean, low-risk claim
+# with verified documents auto-approves — settled in seconds, which for this
+# claimant is the difference between the product working and being a form.
+POST {{baseUrl}}/insurance/claims/{{claimId}}/finalise
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{}
+
+### 45 — the claim's status, with its documents and the payout reference.
+GET {{baseUrl}}/insurance/claims/{{claimId}}
+Authorization: Bearer {{token}}
+
+### 46 — my claims.
+GET {{baseUrl}}/insurance/claims?limit=25
+Authorization: Bearer {{token}}
+
+### 47 — a DUPLICATE claim → 409.
+# Same policy, same incident day, same amount → same `dedupeHash`. Re-send §40
+# verbatim to see it.
+POST {{baseUrl}}/insurance/claims
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "policyId": "{{policyId}}",
+  "amountClaimedMinor": "40000",
+  "incidentDate": "2026-07-20T00:00:00.000Z",
+  "description": "Fell at the site and could not work for eleven days. Treated at the district hospital."
+}
+
+### 48 — an incident INSIDE the waiting period → 400, with the reason.
+# THE anti-adverse-selection control. Note it compares the INCIDENT date, never
+# the filing date, so waiting to file does not convert an uncovered incident
+# into a covered one.
+POST {{baseUrl}}/insurance/claims
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "policyId": "{{policyId}}",
+  "amountClaimedMinor": "40000",
+  "incidentDate": "2026-07-01T00:00:00.000Z",
+  "description": "An incident that falls inside the policy's 30-day waiting period."
+}
+
+### 49 — a claim beyond the REMAINING cover → 400.
+# An aggregate limit: two ₹8,000 claims against ₹10,000 of cover must not both
+# pay in full.
+POST {{baseUrl}}/insurance/claims
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "policyId": "{{policyId}}",
+  "amountClaimedMinor": "99000000",
+  "incidentDate": "2026-07-20T00:00:00.000Z",
+  "description": "A claim for far more than this policy's remaining cover."
+}
+
+### 50 — withdraw a claim. Available while SUBMITTED or INFO_REQUESTED only.
+# A decided claim is part of the book's loss history and cannot be retracted to
+# tidy it up.
+POST {{baseUrl}}/insurance/claims/{{claimId}}/withdraw
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "reason": "Filed by mistake against the wrong policy"
+}
+
+
+########################################################################
+# 60 · ADMIN — adjudication and the book
+########################################################################
+
+### 60 — the claim queue. OLDEST first, so the longest-waiting claimant is not
+# starved by a newest-first ordering.
+GET {{baseUrl}}/admin/insurance/claims?status=UNDER_REVIEW
+Authorization: Bearer {{adminToken}}
+
+### 61 — triage: only the claims the fraud hook flagged.
+GET {{baseUrl}}/admin/insurance/claims?status=UNDER_REVIEW&flaggedOnly=true
+Authorization: Bearer {{adminToken}}
+
+### 62 — THE NUMBER AN INSURER JUDGE LOOKS FOR.
+#
+# Loss ratio = Σ claims paid ÷ Σ premiums earned, both read off the LEDGER
+# rather than from `PremiumPayment.status` and `Claim.amountApprovedMinor`. The
+# application tables record what we INTENDED; the ledger records what moved. So
+# this figure reconciles against M4's trial balance (§90 of m4-payments.http) —
+# two numbers that agree are what tell an insurer this is real.
+#
+# A loss ratio over 100% is REPORTED, not clamped, and the insurance float runs
+# negative to match. An underwriting loss must be visible.
+GET {{baseUrl}}/admin/insurance/book
+Authorization: Bearer {{adminToken}}
+
+### 63 — portfolio counts, the conversion funnel and the operational alarms.
+# Watch `approvedUnpaidClaims`: an approved claim whose payout never settled is
+# the quietest failure in the module — the claimant was told "approved", no
+# error was logged, and the money never arrived.
+GET {{baseUrl}}/admin/insurance/stats
+Authorization: Bearer {{adminToken}}
+
+### 64 — one claim, in full, for a reviewer.
+GET {{baseUrl}}/admin/insurance/claims/{{claimId}}
+Authorization: Bearer {{adminToken}}
+
+### 65 — APPROVE. `reason` is mandatory, including on an approval.
+#
+# An approval nobody has to justify is the shape of internal fraud. The acting
+# admin comes from the authenticated session, never from the body.
+#
+# On approval the payout posts over the M4 ledger, idempotent on
+# `claim-payout:{claimId}`. If it fails the claim stays APPROVED and RETRYABLE —
+# there is deliberately no APPROVED → REJECTED edge, because once a claimant has
+# been told their claim is approved it cannot be walked back for a payout error.
+POST {{baseUrl}}/admin/insurance/claims/{{claimId}}/decide
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "decision": "APPROVE",
+  "reason": "Payslip and hospital record both consistent with eleven days of lost work."
+}
+
+### 66 — partially approve.
+# Capped server-side at both the claimed amount and the remaining cover, so a
+# fat-fingered extra zero cannot pay out more than the contract allows.
+POST {{baseUrl}}/admin/insurance/claims/{{claimId}}/decide
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "decision": "APPROVE",
+  "approveMinor": "25000",
+  "reason": "Documents support seven days of lost income rather than the eleven claimed."
+}
+
+### 67 — ask the claimant for more.
+POST {{baseUrl}}/admin/insurance/claims/{{claimId}}/decide
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "decision": "REQUEST_INFO",
+  "reason": "Please upload the discharge summary — the bill alone does not show the dates of admission."
+}
+
+### 68 — reject, with a ground the claimant can act on.
+POST {{baseUrl}}/admin/insurance/claims/{{claimId}}/decide
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "decision": "REJECT",
+  "reason": "The uploaded bill was assessed as altered; the amount does not match the hospital's own record."
+}
+
+### 69 — an amount on a REJECT → 400. A contradicted intent about somebody's
+# money is refused rather than half-honoured.
+POST {{baseUrl}}/admin/insurance/claims/{{claimId}}/decide
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "decision": "REJECT",
+  "approveMinor": "25000",
+  "reason": "Contradictory: rejecting while naming an approved amount."
+}
+
+### 70 — reveal one document's OCR extraction.
+#
+# Field-encrypted at rest, because a hospital bill names a diagnosis and a
+# treating physician — health data about an identified person. Decrypting it
+# writes its OWN audit row naming the admin: an admin who reads a claimant's
+# medical extraction has done something that must be attributable.
+POST {{baseUrl}}/admin/insurance/documents/{{docId}}/reveal
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{}
+
+### 71 — the policy estate.
+GET {{baseUrl}}/admin/insurance/policies?status=ACTIVE
+Authorization: Bearer {{adminToken}}
+
+### 72 — the premium history for one policy, for a support call.
+GET {{baseUrl}}/admin/insurance/policies/{{policyId}}/premiums
+Authorization: Bearer {{adminToken}}
+
+### 73 — add a product. No deploy needed to launch a cover.
+#
+# The refinements refuse a product that would be unsafe to sell: a waiting
+# period longer than the term could never pay a claim, and a zero waiting period
+# on income protection makes buy-after-the-incident rational.
+POST {{baseUrl}}/admin/insurance/products
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "type": "INCOME_PROTECTION",
+  "name": "Income Protection — Monsoon Cover",
+  "tagline": "For the weeks when the site floods and there is no work to go to.",
+  "currency": "INR",
+  "baseRateBps": 1100,
+  "minCoverMinor": "500000",
+  "maxCoverMinor": "3000000",
+  "termDays": 180,
+  "waitingPeriodDays": 21,
+  "freeLookDays": 15,
+  "exclusions": [
+    "Loss of income from voluntarily leaving a job.",
+    "Days you were able to work but chose not to.",
+    "Any incident inside your 21-day waiting period."
+  ],
+  "disclaimer": "Pravaah provides information, not medical or financial advice. Cover, exclusions and claim decisions are governed by the insurer's policy wording."
+}
+
+### 74 — a waiting period longer than the term → 400.
+POST {{baseUrl}}/admin/insurance/products
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "type": "HEALTH_TOPUP",
+  "name": "Unpayable Cover",
+  "currency": "INR",
+  "baseRateBps": 400,
+  "minCoverMinor": "100000",
+  "maxCoverMinor": "500000",
+  "termDays": 30,
+  "waitingPeriodDays": 60,
+  "exclusions": ["Everything, effectively."],
+  "disclaimer": "Pravaah provides information, not medical or financial advice."
+}
+
+### 75 — retire a product without deleting its history.
+PATCH {{baseUrl}}/admin/insurance/products/{{incomeProtectionId}}/active
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "isActive": false
+}
+
+### 76 — force every lifecycle sweep now: expire quotes, run premium dunning
+# (ACTIVE → GRACE → LAPSED), expire terms, resume stuck money, retry unpaid
+# payouts, close abandoned info requests.
+POST {{baseUrl}}/admin/insurance/run-lifecycle
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{}
+
+
+########################################################################
+# 80 · THE INSURER'S CALLBACKS (mock, signed for real)
+########################################################################
+
+### 80 — what the module is actually running.
+#
+# Surfaced through the API on purpose. A judge or an auditor should be able to
+# read which insurer bound a policy and which engine read a claim document
+# without inferring it from behaviour — and a build that quietly presented a
+# mock as a licensed insurer would be the one thing that discredits everything
+# else here.
+GET {{baseUrl}}/mock/insurer/sign
+Authorization: Bearer {{adminToken}}
+
+### 81 — sign a callback body without sending it, so it can be replayed by hand.
+POST {{baseUrl}}/mock/insurer/sign
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "eventId": "evt-mock-001",
+  "insurerClaimRef": "MOCK-CLM-ABCDEF0123",
+  "status": "APPROVED",
+  "approvedMinor": "40000"
+}
+
+### 82 — fire a correctly signed callback at ourselves.
+#
+# Exercises the REAL webhook path: HMAC over the raw bytes, timing-safe compare,
+# `WebhookEvent` replay dedupe, then the claims state machine. The mock's
+# verification is genuine rather than a stub returning `true` — a mock that
+# waved signatures through would mean the production path had never once run.
+POST {{baseUrl}}/mock/insurer/fire-webhook
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "eventId": "evt-mock-002",
+  "insurerClaimRef": "MOCK-CLM-ABCDEF0123",
+  "status": "IN_ASSESSMENT"
+}
+
+### 83 — replay it. Deduped on `(provider, eventId)` → `{ duplicate: true }`.
+POST {{baseUrl}}/mock/insurer/fire-webhook
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "eventId": "evt-mock-002",
+  "insurerClaimRef": "MOCK-CLM-ABCDEF0123",
+  "status": "IN_ASSESSMENT"
+}
+
+### 84 — an UNSIGNED callback → 403, and nothing recorded.
+# An unsigned callback tells us nothing about whether a claim decision is real,
+# so it must not be recorded as though it did. The response is deliberately
+# uninformative: an endpoint that reported whether a claim reference was
+# recognised would be an oracle for probing which references exist.
+POST {{baseUrl}}/webhooks/insurance/mock-insurer
+Content-Type: application/json
+
+{
+  "eventId": "evt-forged-001",
+  "insurerClaimRef": "MOCK-CLM-ABCDEF0123",
+  "status": "APPROVED"
+}
+
+
+########################################################################
+# 90 · THE PROOF
+########################################################################
+
+### 90 — the trial balance (M4). Must be EXACTLY zero, in every currency.
+#
+# Run this AFTER a premium and a claim payout. M5 posts through the same
+# `LedgerService`, so a premium or a payout that did not conserve money would
+# show up here — which is what makes the loss ratio in §62 a figure that can be
+# trusted rather than asserted.
+GET {{baseUrl}}/admin/payments/trial-balance
+Authorization: Bearer {{adminToken}}
+
+### 91 — the wallet statement. The premium and the payout appear as ledger
+# lines on their own legs (PREMIUM, CLAIM_PAYOUT), beside the M4 transfers.
+GET {{baseUrl}}/payments/wallet/statement
+Authorization: Bearer {{token}}

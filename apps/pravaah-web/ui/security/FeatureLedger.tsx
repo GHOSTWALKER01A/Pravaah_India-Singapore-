@@ -2,7 +2,6 @@ import type { ReactElement } from "react";
 
 import { SECURITY_FEATURES } from "@/lib/content/security";
 import { Legend } from "@/ui/primitives/Legend";
-import { StatusMark } from "@/ui/primitives/StatusMark";
 
 /**
  * The load-bearing section of the site: a banknote's anti-forgery vocabulary
@@ -11,6 +10,11 @@ import { StatusMark } from "@/ui/primitives/StatusMark";
  * It is a two-column ledger rather than a card grid because the whole point is
  * the correspondence — printed feature on the left, real mechanism on the
  * right. Break that pairing and the section says nothing.
+ *
+ * There is no status mark on a row any more. Every mechanism here is built, so
+ * eight identical badges added a column of noise while implying the reader
+ * should be hunting for the exceptions. Stage is stated once for the product,
+ * where it can be read rather than counted.
  */
 export function FeatureLedger(): ReactElement {
   return (
@@ -23,7 +27,7 @@ export function FeatureLedger(): ReactElement {
         A banknote works because anyone can check it and nobody can forge it,
         and it is carried by whoever holds it. This credential is built on the
         same principles. Each printed feature below has a direct counterpart in
-        how Pravaah works.
+        how MyPravaah works.
       </p>
 
       <dl className="mt-14 border-t border-reverse/20">
@@ -42,12 +46,9 @@ export function FeatureLedger(): ReactElement {
             </dt>
 
             <dd>
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-                <span className="denomination text-xl text-reverse sm:text-2xl">
-                  {feature.mechanism}
-                </span>
-                <StatusMark status={feature.status} tone="field" />
-              </div>
+              <span className="denomination block text-xl text-reverse sm:text-2xl">
+                {feature.mechanism}
+              </span>
               <p className="mt-4 max-w-2xl text-[0.9375rem] leading-relaxed text-reverse sm:text-base">
                 {feature.detail}
               </p>

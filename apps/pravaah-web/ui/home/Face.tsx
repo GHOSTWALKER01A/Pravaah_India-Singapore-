@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 
-import { CORRIDOR, buildOpenAppHref } from "@/lib/config/site";
+import { CORRIDOR } from "@/lib/config/site";
 import { ROUTES } from "@/lib/constants/routes";
 import { Guilloche, GuillocheBand } from "@/ui/engraving/Guilloche";
 import { Microtext } from "@/ui/engraving/Microtext";
@@ -18,7 +18,7 @@ import { Legend } from "@/ui/primitives/Legend";
  */
 export function Face(): ReactElement {
   return (
-    <section className="relative overflow-hidden bg-intaglio text-reverse">
+    <section className="relative overflow-clip bg-intaglio text-reverse">
       {/* Watermark rosette bled off the right edge, as a note's portrait
           watermark sits in its own reserved field. */}
       {/* Watermark rosette. Held back on narrow screens, where the headline
@@ -53,7 +53,7 @@ export function Face(): ReactElement {
             <p className="mt-9 max-w-xl text-base leading-relaxed text-reverse-dim sm:text-lg">
               You spent years paying on time. You land somewhere new and the
               financial system there has never heard of you — no loan, a
-              rejected tenancy, insurance priced for a stranger. Pravaah turns
+              rejected tenancy, insurance priced for a stranger. MyPravaah turns
               the history you already built into a credential you hold and can
               present anywhere.
             </p>
@@ -62,16 +62,19 @@ export function Face(): ReactElement {
               <ButtonLink href={ROUTES.HOW_TO_APPLY} variant="reverse">
                 What applying involves
               </ButtonLink>
-              <ButtonLink
-                href={buildOpenAppHref({ source: "face" })}
-                variant="quiet"
-              >
-                Get the app
+              <ButtonLink href={ROUTES.WHAT_IS_BUILT} variant="quiet">
+                What is built
               </ButtonLink>
             </div>
 
-            <p className="legend mt-6 text-reverse-dim">
-              Not yet on the App Store or Google Play
+            {/* The stage, in the first viewport rather than a footer. This
+                audience is deciding whether to trust a stranger with financial
+                data; discovering the licensing position three pages in would be
+                the thing that loses them, and putting it here costs nothing we
+                are entitled to keep. */}
+            <p className="legend mt-6 max-w-md text-reverse-dim">
+              All eight modules built · not yet licensed · not yet on the App
+              Store or Google Play
             </p>
           </div>
 

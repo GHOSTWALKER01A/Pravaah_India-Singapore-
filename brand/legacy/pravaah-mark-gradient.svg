@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 660.054 594.038" role="img" aria-labelledby="pravaah-mark-gradient-title">
+  <title id="pravaah-mark-gradient-title">Pravaah</title>
+  <defs>
+    <linearGradient id="pravaah-blue" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3EA1FF"/>
+      <stop offset="1" stop-color="#0172DE"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#pravaah-blue)" d="M302.073 0H357.981A68.9 68.9 0 0 1 419.133 37.157L655.649 492.798A39.175 39.175 0 0 1 656.783 526.518L637.212 571.359A37.8 37.8 0 0 1 570.515 576.274L346.35 217.673A19.25 19.25 0 0 0 313.704 217.673L89.539 576.274A37.8 37.8 0 0 1 22.842 571.359L3.271 526.518A39.175 39.175 0 0 1 4.405 492.798L240.921 37.157A68.9 68.9 0 0 1 302.073 0Z"/>
+</svg>

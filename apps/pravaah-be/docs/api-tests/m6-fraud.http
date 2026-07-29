@@ -1,0 +1,1533 @@
+########################################################################
+# PRAVAAH · M6 — Fraud & Risk (the cross-cutting shield)
+#
+# VS Code "REST Client" / JetBrains HTTP client.  Base = /api/v1/...
+#
+# Every other module DOES something: verify identity, pull consented data,
+# score reputation, mint a passport, move money, sell cover. M6 is the module
+# that keeps all of it safe. It is NOT a screen a user visits — it is a
+# service the other modules call at their decision points, plus an analyst
+# console and a set of background detectors.
+#
+# So this file reads differently from m4/m5. Most of what M6 does happens
+# INSIDE a call you make to another module: you send an M4 transfer and the
+# risk engine answers ALLOW / STEP_UP / HOLD / BLOCK before it submits. The
+# requests below are (a) the small user-facing surface, (b) the analyst
+# console, and (c) the triggers that make the interesting decisions happen.
+#
+# ─── READ THIS BEFORE SENDING ANYTHING ────────────────────────────────────
+#
+# 1. THE MOST IMPORTANT REQUESTS IN THIS FILE ARE IN m4-payments.http.
+#    M6 has no "score this transfer" endpoint, on purpose. Exposing one would
+#    be an oracle: an attacker could tune an amount, a device and a payee
+#    against a live scorer until it returned ALLOW, then send the real thing.
+#    Risk is evaluated inline, once, on the request that actually acts.
+#
+# 2. A `HOLD` IS NOT A DECLINE.
+#    The transaction parks in `RISK_HELD` with the funds NOT reserved, and an
+#    analyst (§40) or a step-up (§21) releases it. That is why the signals can
+#    afford to be blunt: a false positive costs a review, not a customer.
+#
+# 3. A `STEP_UP` IS RELEASED BY THE USER, NOT AN ANALYST.
+#    Same `RISK_HELD` state — M4 has exactly one "money not yet moved" state
+#    and inventing a second would mean every reconciler and scheduler had to
+#    learn about it. What differs is the route out. §21 is that route.
+#
+# 4. SET `FRAUD_ECHO_STEP_UP_OTP=true` IN `.env.development.local`.
+#    Otherwise every step-up here needs a real SMS. The flag is HARD-REFUSED
+#    when `NODE_ENV=production`, because an API that returns its own one-time
+#    code is not a second factor at all.
+#
+# 5. SCORES ARE NOT IN THE USER-FACING RESPONSES.
+#    §30 returns the DECISION and the plain-language reasons, never the
+#    number, the signal types or the weights. A precise score is a calibration
+#    oracle; a person is owed an explanation of a decision about them, not the
+#    detector's specification. The analyst views (§50) show everything.
+#
+# ─── PREREQUISITES ────────────────────────────────────────────────────────
+#
+#   • `npm run prisma:push` — M6 adds 11 models plus columns on `Device`.
+#     NOTHING in this file works until that has run.
+#   • A VERIFIED user (M0) with a wallet balance (M4 §05) and at least one
+#     payee (M4 §10), so there is something for the engine to decide about.
+#   • An AdminUser with role `ANALYST`, `SENIOR_REVIEWER` or `ADMIN` for §40+.
+#     `ANALYST` is new in M6 — re-seed or update the row by hand.
+#   • `.env.development.local`:
+#       RISK_HASH_KEY=<any long random string>
+#       FRAUD_ECHO_STEP_UP_OTP=true
+#
+# ─── THE SHOWPIECE ────────────────────────────────────────────────────────
+#
+#   §11  SIM SWAP. Flip `FRAUD_SIM_SWAP_HASH=*`, restart, act — the device
+#        moves to `SUSPECTED_SWAP`, a fresh cooling-off starts, and the next
+#        high-value transfer is challenged or held. The detection does NOT
+#        depend on the telco stub: it compares against a serial WE anchored.
+#   §20  NEW DEVICE → IMMEDIATE LARGE TRANSFER. The account-takeover shape.
+#        Binding is cheap; binding then draining is not.
+#   §41  MULE / NEW-BENEFICIARY DRAIN → `HOLD` → open the case, read the exact
+#        signals that fired → CLEAR it → watch the transfer release.
+#   §70  CREDENTIAL STUFFING. Six wrong OTPs and the per-identifier counter
+#        fires; forty from one /24 and it hard-blocks.
+#
+#   No-database proof of the engine's arithmetic and every threat-scenario
+#   calibration:  npx jest src/modules/fraud
+########################################################################
+
+@baseUrl = http://localhost:8000/api/v1
+@token = PASTE_USER_ACCESS_TOKEN
+@adminToken = PASTE_ADMIN_ACCESS_TOKEN
+
+# The app's own installation id. Any uuid — the client generates it once and
+# keeps it. NOT a hash, despite what the `Device.deviceId` column was once
+# commented as; hashing happens where it buys privacy (the mule graph).
+@deviceId = 11111111-2222-4333-8444-555555555555
+# A second one, for the "act from an unregistered device" cases.
+@strangerDeviceId = 99999999-8888-4777-8666-555555555555
+
+# Filled in as you go.
+@deviceRef = PASTE_DEVICE_REF
+@nonce = PASTE_STEP_UP_NONCE
+@devOtp = PASTE_DEV_OTP
+@caseId = PASTE_FRAUD_CASE_ID
+@assessmentId = PASTE_ASSESSMENT_ID
+@transactionId = PASTE_TRANSACTION_ID
+@userId = PASTE_USER_ID
+
+# Sections 143-153 — the app PIN and the launch gate.
+@newPin = 073859
+@biometricNonce = PASTE_BIOMETRIC_NONCE
+@biometricAssertion = PASTE_BIOMETRIC_ASSERTION
+
+
+########################################################################
+# 01 · WHERE YOU STAND — before touching anything
+########################################################################
+
+### 01 — my registered devices.
+#
+# Empty on a fresh account, and that is the finding rather than a bug: before
+# M6, NOTHING in this codebase ever wrote a `Device` row. The model existed
+# since M0 and M4's risk scoring read it, so every device check was dead code
+# that scored every transfer `UNKNOWN_DEVICE` and could never fire the
+# SIM-swap branch. §10 is where that changes.
+GET {{baseUrl}}/security/devices
+Authorization: Bearer {{token}}
+
+### 02 — my recent security decisions. Empty until something is scored.
+GET {{baseUrl}}/security/assessments
+Authorization: Bearer {{token}}
+
+### 03 — anything of mine under review, with a reference to quote to support.
+# The honest version of a held action: not a dead error, but a reference, a
+# reason, and a stated expectation. A hold a user cannot see or ask about is
+# indistinguishable from a bug.
+GET {{baseUrl}}/security/holds
+Authorization: Bearer {{token}}
+
+
+########################################################################
+# 10 · DEVICE BINDING — the layer M0 designed and never built
+########################################################################
+
+### 10 — begin binding this device.
+#
+# Returns a CHALLENGE, never a binding token. A bind that handed back
+# credentials before the challenge was answered would make the challenge
+# decorative — which is precisely the account-takeover scenario, where the
+# attacker already has the session and needs only a trusted device.
+#
+# Copy `data.deviceRef` → @deviceRef, `data.stepUp.nonce` → @nonce and
+# `data.stepUp.devOtp` → @devOtp.
+POST {{baseUrl}}/security/devices/bind
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "deviceId": "{{deviceId}}",
+  "platform": "android",
+  "simSerial": "8991000012345678901",
+  "integrity": "OK",
+  "model": "Pixel 8",
+  "osVersion": "15",
+  "appVersion": "1.0.0",
+  "geoHint": "IN-MH"
+}
+
+### 11 — finish the bind. The binding token comes back exactly ONCE.
+#
+# Only its hash is stored, so a lost token cannot be recovered — the device
+# re-binds instead. Same discipline as an OTP, for the same reason: a
+# device-binding token readable from a database backup is a device binding an
+# attacker can assume without ever touching the handset.
+#
+# Note the response: `coolingOff: true`. Binding is cheap, but it STARTS A
+# CLOCK. For 24 hours, high-value actions from this device face extra
+# scrutiny — because the threat is not a new device, it is a new device that
+# immediately moves money.
+POST {{baseUrl}}/security/devices/bind/confirm
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "nonce": "{{nonce}}",
+  "answer": "{{devOtp}}"
+}
+
+### 12 — the devices list again. Now ACTIVE, with `inCoolingOff: true`.
+# Surfaced so the app can explain the friction BEFORE the user types an
+# amount, rather than after.
+GET {{baseUrl}}/security/devices
+Authorization: Bearer {{token}}
+
+### 13 — re-bind the SAME device. Idempotent: `alreadyBound: true`, no challenge.
+# An app that reinstalled and kept its installation id should not be forced
+# through a challenge it already passed.
+POST {{baseUrl}}/security/devices/bind
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "deviceId": "{{deviceId}}",
+  "platform": "android",
+  "integrity": "OK"
+}
+
+### 14 — bind an EMULATOR. Succeeds, and is scored.
+#
+# Read `data.riskReasons` — "This app is running on an emulator" is a
+# 0.45-weight signal (T9, device farming). Not refused: a legitimate developer
+# or an accessibility tool can look like this, and an outright block would be a
+# false positive nobody can appeal. It is priced in instead.
+POST {{baseUrl}}/security/devices/bind
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "deviceId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+  "platform": "android",
+  "integrity": "EMULATOR",
+  "geoHint": "IN-MH"
+}
+
+### 15 — bind without a SIM serial (an iPhone, or a web client).
+#
+# Also allowed, also scored — `SIM_UNVERIFIABLE`, weight 0.15. Common and
+# usually innocent: iOS does not expose the ICCID. But a device we cannot
+# swap-check has one fewer layer, and the score should SAY so rather than
+# silently assume the layer is present.
+POST {{baseUrl}}/security/devices/bind
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "deviceId": "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+  "platform": "ios",
+  "integrity": "OK",
+  "geoHint": "IN-MH"
+}
+
+### 16 — the sixth ACTIVE device → 400.
+#
+# `MAX_ACTIVE_DEVICES` is 5. "One attacker operating twelve handsets on one
+# account" and "a person with a phone, a tablet and a spare" are
+# indistinguishable until you count. Forcing an explicit revoke means the user
+# SEES the eviction rather than the platform silently dropping a device they
+# still use.
+POST {{baseUrl}}/security/devices/bind
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "deviceId": "cccccccc-dddd-4eee-8fff-000000000000",
+  "platform": "android",
+  "integrity": "OK"
+}
+
+### 17 — "this wasn't me." Immediate, and deliberately needs NO step-up.
+#
+# Revoking is the SAFE direction. A user who suspects a compromise must be
+# able to act instantly, and demanding an OTP from somebody whose SIM was just
+# swapped denies them the one control that actually helps. Binding is what
+# costs a challenge; unbinding never should.
+POST {{baseUrl}}/security/devices/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/revoke
+Authorization: Bearer {{token}}
+
+### 18 — another user's device id → 404, not 403.
+# `updateMany` scoped to the caller, so a device id from another account
+# matches zero rows. A 403 would confirm the device exists.
+POST {{baseUrl}}/security/devices/00000000-0000-4000-8000-000000000000/revoke
+Authorization: Bearer {{token}}
+
+### 19 — rotate the binding token.
+#
+# Why bother: a token that never changes has the useful life of the ACCOUNT.
+# With rotation, a token captured from a log, a backup or a compromised handset
+# stops working at the next refresh — which bounds the damage of a leak nobody
+# detected.
+POST {{baseUrl}}/security/devices/{{deviceRef}}/refresh
+Authorization: Bearer {{token}}
+
+
+########################################################################
+# 11 · SIM SWAP (T1) — the showpiece
+#
+# The canonical account-takeover second half: the attacker has the password,
+# ports the victim's number, and now receives the OTPs. The defence is that
+# the SIM SERIAL was anchored at bind time, so the swap is visible even though
+# the OTP now arrives at the attacker.
+#
+# TWO INDEPENDENT TRIGGERS, either sufficient:
+#   1. OUR ANCHOR DISAGREES — the serial presented now differs from the stored
+#      one. This is the real control and it needs no carrier at all.
+#   2. THE CARRIER SAYS SO — corroboration, and the only way to catch a swap
+#      that happened while the app was closed.
+########################################################################
+
+### 20 — trigger a swap through the CARRIER path.
+#
+# Fires a correctly signed SIM-change callback at our OWN webhook, over HTTP,
+# through the real signature verification, the real replay dedupe and the real
+# handler. A test that called the handler directly would exercise none of
+# those — and the webhook path is the one place in M6 where a mistake is
+# silently exploitable in BOTH directions (a forged freeze, or a real swap
+# ignored).
+#
+# Set `FRAUD_SIM_SWAP_HASH=*` and restart first, so the dev telco reports a
+# re-issue. `mobile` must be the user's E.164 number as stored on `User.phone`.
+POST {{baseUrl}}/mock/telco/sim-swap
+Content-Type: application/json
+
+{
+  "eventId": "telco-evt-001",
+  "mobile": "+919876543210",
+  "simSerial": "8991000099999999999"
+}
+
+### 21 — the devices list. Status is now `SUSPECTED_SWAP`.
+#
+# Note what did NOT happen: the device was not revoked. It is FROZEN for
+# high-value actions with a fresh 24h cooling-off. Somebody who simply replaced
+# a damaged SIM recovers with one challenge (§23); an attacker who swapped it
+# to intercept OTPs finds the OTP alone is no longer enough.
+GET {{baseUrl}}/security/devices
+Authorization: Bearer {{token}}
+
+### 22 — replay the SAME callback. Deduped on `(provider, eventId)`.
+#
+# `{ duplicate: true }`. Replaying a SIM-change notification would otherwise be
+# a free way to re-freeze a device the user just recovered.
+POST {{baseUrl}}/mock/telco/sim-swap
+Content-Type: application/json
+
+{
+  "eventId": "telco-evt-001",
+  "mobile": "+919876543210",
+  "simSerial": "8991000099999999999"
+}
+
+### 23 — ask for a recovery challenge on the frozen device.
+POST {{baseUrl}}/security/devices/{{deviceRef}}/recover/request
+Authorization: Bearer {{token}}
+
+### 24 — recover it, RE-ANCHORING the new SIM.
+#
+# That re-anchor is what makes recovery meaningful: the legitimate user's new
+# SIM becomes the new baseline, while an attacker who cannot pass the challenge
+# leaves the device frozen. The cooling-off is deliberately NOT cleared — a
+# recovered device is still a recently-changed one.
+POST {{baseUrl}}/security/devices/{{deviceRef}}/recover
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "nonce": "{{nonce}}",
+  "answer": "{{devOtp}}",
+  "simSerial": "8991000099999999999"
+}
+
+### 25 — an UNSIGNED telco callback → 403, and nothing recorded.
+#
+# This endpoint can FREEZE a user's payments, which makes it powerful in two
+# opposite directions. Unauthenticated, it is a denial-of-service: anybody who
+# can POST here could freeze any user by naming their number. So the HMAC over
+# the raw bytes is not ceremony — it is the only thing between a public URL and
+# an attacker-controlled kill switch on the payment system.
+POST {{baseUrl}}/webhooks/fraud/telco/dev-telco
+Content-Type: application/json
+
+{
+  "eventId": "telco-forged-001",
+  "mobile": "+919876543210",
+  "simSerial": "8991000000000000000"
+}
+
+### 26 — an unknown provider name → flat 403, no stack trace.
+# The provider name comes from an UNAUTHENTICATED caller's URL, so a probe must
+# not produce a 500 or reveal which names are valid.
+POST {{baseUrl}}/webhooks/fraud/telco/not-a-real-carrier
+Content-Type: application/json
+
+{ "mobile": "+919876543210" }
+
+### 27 — sign a body without sending it, to replay by hand.
+# Send EXACTLY the returned `body` string — re-serialising it re-orders keys
+# and invalidates the signature. That mismatch is the single most common way a
+# working HMAC integration silently starts rejecting everything.
+POST {{baseUrl}}/mock/telco/sign
+Content-Type: application/json
+
+{ "eventId": "telco-evt-002", "mobile": "+919876543210" }
+
+
+########################################################################
+# 20 · THE DECISION IN THE PAYMENT PATH (T2, T7, T8)
+#
+# There is no M6 endpoint here. Risk is evaluated INLINE by M4, once, on the
+# request that actually moves money — see note 1 in the header.
+#
+# Run these against m4-payments.http and watch the RESPONSE STATUS:
+#
+#   ALLOW    → the transfer proceeds normally.
+#   STEP_UP  → status `RISK_HELD`, `failureReason: "Awaiting your
+#              confirmation"`, and a challenge has been issued. §21 releases it.
+#   HOLD     → status `RISK_HELD` and a `FraudCase` is open. §40 releases it.
+#   BLOCK    → refused outright, with a `CRITICAL` case.
+########################################################################
+
+### 30 — the takeover shape: a large transfer from a JUST-BOUND device.
+#
+# Bind a fresh device (§10–11), then send this immediately. `DEVICE_NEW` is
+# only 0.20, which would score 0.20 and ALLOW on the arithmetic alone — so the
+# ladder has a STRUCTURAL rule: any sensitive action from a new, unbound or
+# swap-suspected device is challenged regardless of score. That rule exists
+# precisely because this is the pattern the arithmetic is worst at.
+#
+# Needs a live `quoteId` from M4 §20. Copy `data.id` → @transactionId.
+POST {{baseUrl}}/payments/transfers
+Authorization: Bearer {{token}}
+Idempotency-Key: m6-stepup-001
+Content-Type: application/json
+
+{
+  "beneficiaryId": "PASTE_BENEFICIARY_ID",
+  "quoteId": "PASTE_QUOTE_ID",
+  "expectedTotalDebitMinor": "PASTE_TOTAL_FROM_QUOTE",
+  "type": "REMITTANCE",
+  "purposeCode": "P2P_TRANSFER",
+  "confirmedRegisteredName": "PASTE_EXACT_REGISTERED_NAME",
+  "confirmedName": true,
+  "deviceId": "{{deviceId}}",
+  "geoHint": "IN-MH"
+}
+
+### 31 — the same transfer from an UNREGISTERED device.
+#
+# `DEVICE_UNBOUND`, 0.35. Scored, not refused: several legitimate callers have
+# no bound device — a web session, a scheduled mandate debit, an
+# admin-initiated action. Refusing here would break those.
+POST {{baseUrl}}/payments/transfers
+Authorization: Bearer {{token}}
+Idempotency-Key: m6-unbound-001
+Content-Type: application/json
+
+{
+  "beneficiaryId": "PASTE_BENEFICIARY_ID",
+  "quoteId": "PASTE_QUOTE_ID",
+  "expectedTotalDebitMinor": "PASTE_TOTAL_FROM_QUOTE",
+  "type": "REMITTANCE",
+  "purposeCode": "P2P_TRANSFER",
+  "confirmedRegisteredName": "PASTE_EXACT_REGISTERED_NAME",
+  "confirmedName": true,
+  "deviceId": "{{strangerDeviceId}}",
+  "geoHint": "IN-MH"
+}
+
+### 32 — IMPOSSIBLE TRAVEL (T10). Send §30, then this within the hour.
+#
+# Two different countries inside 60 minutes → `GEO_IMPOSSIBLE`, 0.50. Nobody
+# flew India↔Singapore in that window, so one of the two sessions is not the
+# account holder.
+#
+# The window is a conservative 60 minutes ON PURPOSE. This is a cross-border
+# remittance product whose users genuinely move between two countries — that is
+# the entire premise — so a tight window would flag real travellers, which is
+# friction this product cannot afford.
+POST {{baseUrl}}/payments/transfers
+Authorization: Bearer {{token}}
+Idempotency-Key: m6-geo-001
+Content-Type: application/json
+
+{
+  "beneficiaryId": "PASTE_BENEFICIARY_ID",
+  "quoteId": "PASTE_QUOTE_ID",
+  "expectedTotalDebitMinor": "PASTE_TOTAL_FROM_QUOTE",
+  "type": "REMITTANCE",
+  "purposeCode": "P2P_TRANSFER",
+  "confirmedRegisteredName": "PASTE_EXACT_REGISTERED_NAME",
+  "confirmedName": true,
+  "deviceId": "{{deviceId}}",
+  "geoHint": "SG"
+}
+
+
+########################################################################
+# 21 · ANSWERING A STEP-UP — the user releases their own transfer
+#
+# The medium-risk band, and the highest-leverage control in the module. It does
+# not block; it raises the COST of the attack. A remote attacker holding
+# phished credentials usually cannot produce a factor bound to the handset, so
+# the challenge converts a successful credential theft into a dead end without
+# inconveniencing the real user beyond one tap.
+#
+# This is the RBI dynamic-second-factor mandate (effective 1 April 2026) in
+# code.
+########################################################################
+
+### 40 — confirm the held transfer.
+#
+# Nonce + answer. NO `Idempotency-Key`, deliberately: the single-use nonce
+# already provides replay protection, and more strictly than a key would — a
+# second call with the same nonce is REFUSED because the challenge has left
+# PENDING, whereas an idempotency replay would cheerfully return the first
+# call's success.
+#
+# The nonce came back on the §30 response. It is scoped to that transfer's
+# idempotency key, so it cannot be redeemed against a different, larger one.
+POST {{baseUrl}}/payments/transfers/{{transactionId}}/confirm
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "nonce": "{{nonce}}",
+  "answer": "{{devOtp}}"
+}
+
+### 41 — replay it. Refused: the challenge is single-use (T13).
+POST {{baseUrl}}/payments/transfers/{{transactionId}}/confirm
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "nonce": "{{nonce}}",
+  "answer": "{{devOtp}}"
+}
+
+### 42 — a WRONG code. Counts an attempt and says how many remain.
+POST {{baseUrl}}/payments/transfers/{{transactionId}}/confirm
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "nonce": "{{nonce}}",
+  "answer": "000000"
+}
+
+### 43 — request a generic challenge (the app's own step-up prompt).
+#
+# `purpose` AND `subjectId` are both REQUIRED, and the requirement is a real
+# control rather than bookkeeping: a challenge is scoped to ONE action, so a
+# code issued for a ₹100 transfer cannot be redeemed against a ₹100,000 one.
+# `verify` re-checks both — the confused-deputy defence the M6 build doc
+# omitted entirely.
+POST {{baseUrl}}/security/step-up/request
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "purpose": "TRANSACTION",
+  "subjectId": "m6-stepup-001"
+}
+
+### 44 — answer it.
+POST {{baseUrl}}/security/step-up/verify
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "nonce": "{{nonce}}",
+  "answer": "{{devOtp}}"
+}
+
+### 45 — brute force it. Three wrong answers → FAILED, then a lockout.
+#
+# Send §43, then this FOUR times. The per-challenge attempt cap is three; past
+# five failures in 30 minutes, `STEP_UP.FAIL_LOCKOUT_COUNT` stops issuing
+# challenges at all. Without the second limit, "three guesses per challenge
+# with unlimited challenges" is unlimited guesses.
+POST {{baseUrl}}/security/step-up/verify
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "nonce": "{{nonce}}",
+  "answer": "111111"
+}
+
+
+########################################################################
+# 30 · TRANSPARENCY — the DPDP answer, made tangible
+########################################################################
+
+### 50 — my recent security decisions.
+#
+# Returns the DECISION and the plain-language reasons. NOT the score, NOT the
+# signal types, NOT the weights — and that omission is a security property, not
+# coyness. A precise score turns this endpoint into a calibration oracle: an
+# attacker who reads "0.83" after each attempt can tune inputs until it drops
+# below a threshold they can observe.
+#
+# A person is owed an explanation of a decision about them. They are not owed
+# the detector's specification.
+GET {{baseUrl}}/security/assessments
+Authorization: Bearer {{token}}
+
+### 51 — my open holds.
+#
+# The analyst's own vocabulary is mapped out here too: `INVESTIGATING` tells a
+# customer nothing and sounds accusatory, so it is presented as
+# `UNDER_REVIEW`. The `reference` IS the case id, which is what support asks
+# for — it ties a complaint to the exact signal trail an analyst will read,
+# with no lookup in between.
+GET {{baseUrl}}/security/holds
+Authorization: Bearer {{token}}
+
+
+########################################################################
+# 40 · THE ANALYST CONSOLE — the human-in-the-loop guarantee
+#
+# This is what makes an automated HOLD defensible. A system that freezes
+# somebody's remittance on a model's say-so, with no named reviewer, no stated
+# reason and no appeal, is not a fraud control — it is an unaccountable denial
+# of service against your own customers.
+########################################################################
+
+### 60 — operational stats.
+#
+# `cases.slaBreached` is the number to page on: it counts people whose money
+# has been held past the promised window. Everything else is context for it.
+#
+# `providers` is included so an auditor can read whether SIM-swap detection is
+# carrier-corroborated WITHOUT inferring it from behaviour. It reports
+# `live: false` on purpose — a build that quietly presented a dev stub as a
+# real carrier integration would discredit every other claim in the module.
+GET {{baseUrl}}/admin/fraud/stats
+Authorization: Bearer {{adminToken}}
+
+### 61 — the queue.
+#
+# Ordered by severity DESC then SLA ASC: most dangerous first, and within a
+# severity the LONGEST-WAITING first. A newest-first queue starves the user who
+# has been held longest — who is also the person most likely to be a false
+# positive and most likely to churn.
+#
+# Copy a `data.items[0].id` → @caseId.
+GET {{baseUrl}}/admin/fraud/cases?status=OPEN&limit=25
+Authorization: Bearer {{adminToken}}
+
+### 62 — only the cases assigned to me.
+GET {{baseUrl}}/admin/fraud/cases?mine=true
+Authorization: Bearer {{adminToken}}
+
+### 63 — one case, with the FULL signal trail.
+#
+# This is the payload that makes a hold explainable: every signal that fired,
+# with its weight and degree, the aggregated score, and the model version that
+# produced it. `modelVersion` is stored per assessment because the weights ARE
+# the policy — without it, a score from before a re-tune cannot be compared
+# with one from after, and an appeal six months later cannot be argued against
+# the rules that actually applied.
+GET {{baseUrl}}/admin/fraud/cases/{{caseId}}
+Authorization: Bearer {{adminToken}}
+
+### 64 — claim it. Atomic.
+#
+# A conditional `updateMany` whose WHERE clause encodes the precondition. Two
+# analysts opening the same queue and clicking at once is routine in a shared
+# console, not hypothetical — and read-check-write would let both succeed, with
+# the second silently overwriting the first.
+POST {{baseUrl}}/admin/fraud/cases/{{caseId}}/claim
+Authorization: Bearer {{adminToken}}
+
+### 65 — claim it AGAIN → 409, with which of the two reasons it was.
+POST {{baseUrl}}/admin/fraud/cases/{{caseId}}/claim
+Authorization: Bearer {{adminToken}}
+
+### 66 — add an investigation note without deciding.
+POST {{baseUrl}}/admin/fraud/cases/{{caseId}}/note
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "note": "Called the payer on the number on file. They confirm they added this payee themselves after speaking to their landlord. Checking the payee against the mule graph before releasing."
+}
+
+### 67 — ask the user for something. PAUSES the SLA clock.
+# The wait is not ours, so it should not count against our promised window.
+POST {{baseUrl}}/admin/fraud/cases/{{caseId}}/request-info
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "note": "Asked the payer to confirm the payee's relationship to them and how they obtained the VPA."
+}
+
+### 68 — CLEAR it. A false positive → the transfer RELEASES.
+#
+# Two things happen, and the second is what makes the system learn: the held
+# action is released through `RiskActionRegistry`, and a whitelist signal is
+# recorded so the same benign behaviour is not re-flagged tomorrow. Without the
+# second half the user is held every week and the analyst re-clears it weekly.
+#
+# `note` is mandatory on EVERY branch including this one. A release nobody had
+# to justify is precisely the shape of insider fraud — and it is also the
+# record the user is owed if they later ask why their money was held.
+#
+# READ THE RESPONSE CAREFULLY. `status` and `actionApplied` are reported
+# SEPARATELY because they can genuinely disagree: a case may be CLEARED while
+# the release fails because the transaction expired during the review. One
+# field for both would tell an analyst a payment was released when it was not.
+POST {{baseUrl}}/admin/fraud/cases/{{caseId}}/resolve
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "outcome": "CLEARED",
+  "note": "Payer verified by callback on the number on file. Payee is their landlord, relationship confirmed, no mule-graph linkage. Releasing."
+}
+
+### 69 — the transfer, after the release.
+# Re-enters the saga at VALIDATED, NOT at RESERVED. A hold can sit for hours,
+# so the balance may have been spent and the day's limit used since the check
+# that produced it. Skipping to the reserve would trust a stale check.
+GET {{baseUrl}}/payments/transfers/{{transactionId}}
+Authorization: Bearer {{token}}
+
+### 70 — CONFIRM FRAUD on a different case. The system learns.
+#
+# Four consequences, and the point of confirming rather than merely blocking:
+#   • the transfer is blocked;
+#   • the ACCOUNT is suspended — and `User.isSuspended` is now a hard gate in
+#     the risk engine, so one flag stops payments, claims, consents AND device
+#     binds rather than only transfers;
+#   • the PAYEE goes on the mule list, read off the transaction rather than
+#     typed by the analyst. This is the step that protects OTHER users: the
+#     mule account that received this payment is the one the next victim will
+#     be told to pay;
+#   • cross-border cases raise a `compliance.str_required` audit row.
+#
+# That last one is deliberately an audit row and not an automated filing. An
+# STR is a regulated submission to FIU-IND made by a designated principal
+# officer, not something an application submits. What code can correctly do is
+# make the obligation undeniable and timestamped.
+POST {{baseUrl}}/admin/fraud/cases/PASTE_ANOTHER_CASE_ID/resolve
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "outcome": "CONFIRMED_FRAUD",
+  "note": "Payer reports they were instructed by a caller impersonating their bank. Payee VPA matches two other reports this week. Confirmed APP fraud."
+}
+
+### 71 — try to resolve it AGAIN → 409.
+# CLEARED and CONFIRMED_FRAUD are TERMINAL. A case whose outcome could be
+# revisited after the money moved is a case an insider can rewrite.
+POST {{baseUrl}}/admin/fraud/cases/{{caseId}}/resolve
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "outcome": "CLEARED",
+  "note": "Trying to undo the previous decision."
+}
+
+### 72 — ESCALATE instead of deciding.
+#
+# Not a verdict — a request for a more senior decision. So `resolvedAt` stays
+# NULL (stamping it would drop the case out of every open-case query and lose
+# it) and the case is UNASSIGNED so a senior analyst can claim it.
+POST {{baseUrl}}/admin/fraud/cases/PASTE_A_THIRD_CASE_ID/resolve
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "outcome": "ESCALATED",
+  "note": "Payee name is a partial match against a UN consolidated list entry. Needs compliance to make the sanctions determination."
+}
+
+### 73 — a plain ANALYST confirming a sanctions-derived case → 403.
+#
+# A sanctions determination has legal consequences that outlast the case — it
+# names a person as a designated party — so it needs a senior reviewer or
+# compliance, not a first line analyst. Mirrors M0's gate on KYC rejections and
+# M5's on claim approvals.
+#
+# Gated on the stored SIGNAL TYPES, not on the analyst's note. The note is free
+# text: gating on it would let the gate be avoided by wording, and would fire
+# falsely on an analyst who merely mentioned the word.
+#
+# Send with an `ANALYST`-role token against a case whose reason contains
+# `WATCHLIST_HIT`.
+POST {{baseUrl}}/admin/fraud/cases/PASTE_SANCTIONS_CASE_ID/resolve
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "outcome": "CONFIRMED_FRAUD",
+  "note": "Payee matches a sanctions list entry."
+}
+
+
+########################################################################
+# 50 · ASSESSMENTS — the model's behaviour, inspectable
+########################################################################
+
+### 80 — every assessment, filterable.
+#
+# Unlike §50 this DOES include scores and weights. An analyst defending a hold,
+# or tuning a threshold, needs the arithmetic. That asymmetry is the reason
+# there are two projections rather than one.
+GET {{baseUrl}}/admin/fraud/assessments?limit=25
+Authorization: Bearer {{adminToken}}
+
+### 81 — only the holds and blocks.
+GET {{baseUrl}}/admin/fraud/assessments?decision=HOLD
+Authorization: Bearer {{adminToken}}
+
+### 82 — only the step-ups, to see how much friction is being added.
+GET {{baseUrl}}/admin/fraud/assessments?decision=STEP_UP
+Authorization: Bearer {{adminToken}}
+
+### 83 — one assessment in full, with its case and notes.
+GET {{baseUrl}}/admin/fraud/assessments/{{assessmentId}}
+Authorization: Bearer {{adminToken}}
+
+### 84 — one user's whole risk picture, in ONE call.
+#
+# Devices, recent decisions, cases, the graph neighbourhood, and the device
+# event timeline. Built as one endpoint rather than five because an analyst
+# working a case needs all of it at once — and five round trips is five chances
+# to look at a stale half of the picture while deciding whether to release
+# somebody's money.
+GET {{baseUrl}}/admin/fraud/users/{{userId}}
+Authorization: Bearer {{adminToken}}
+
+
+########################################################################
+# 51 · LISTS — watch / block / mule / sanctions
+#
+# `kind` decides everything. WATCH contributes a weighted signal the ladder may
+# or may not act on. BLOCK, MULE and SANCTIONS are HARD: they bypass the
+# arithmetic entirely and force a BLOCK — because "the payee is on a sanctions
+# list" is not a probability to be averaged against a good payment history, and
+# a system that could average it away would eventually settle one.
+########################################################################
+
+### 90 — list a mule VPA. SENIOR_REVIEWER or ADMIN only.
+#
+# Takes the identifier in PLAINTEXT and hashes it server-side. That is the
+# opposite of what the M6 build doc specified (`valueHash` in the body), and
+# the difference is a correctness bug rather than a preference: if the client
+# supplies the hash, the CLIENT chooses the salt — so two consoles would
+# produce two different hashes for the same VPA and neither would ever match a
+# lookup. The salt is a server secret; only the server can compute the key.
+POST {{baseUrl}}/admin/fraud/lists
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "kind": "MULE",
+  "entityType": "VPA",
+  "value": "fraudster@ybl",
+  "reason": "Received funds in three confirmed APP-fraud cases this week."
+}
+
+### 91 — a WATCH entry, time-boxed.
+# Soft: a 0.35 weighted signal, never a hard block. Expires on its own, and the
+# retention sweep deactivates rather than deletes it — the row is the record
+# that an identifier was once listed and by whom, which is what an appeal is
+# argued from.
+POST {{baseUrl}}/admin/fraud/lists
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "kind": "WATCH",
+  "entityType": "IP",
+  "value": "203.0.113.42",
+  "reason": "Elevated failed-login volume. Watching for two weeks.",
+  "expiresAt": "2026-08-12T00:00:00.000Z"
+}
+
+### 92 — now pay the listed VPA. Hard BLOCK, with a CRITICAL case.
+#
+# Add `fraudster@ybl` as a payee in M4 §10, then send a transfer to it. The
+# user-facing reason is deliberately vague — "Payments involving the payee are
+# not permitted". Naming the list or quoting the analyst's note would tell a
+# fraudster exactly what we know and which address to abandon.
+POST {{baseUrl}}/payments/transfers
+Authorization: Bearer {{token}}
+Idempotency-Key: m6-blocklist-001
+Content-Type: application/json
+
+{
+  "beneficiaryId": "PASTE_LISTED_BENEFICIARY_ID",
+  "quoteId": "PASTE_QUOTE_ID",
+  "expectedTotalDebitMinor": "PASTE_TOTAL_FROM_QUOTE",
+  "type": "REMITTANCE",
+  "purposeCode": "P2P_TRANSFER",
+  "confirmedRegisteredName": "PASTE_EXACT_REGISTERED_NAME",
+  "confirmedName": true,
+  "deviceId": "{{deviceId}}"
+}
+
+### 93 — active listings, as counts by kind and entity type.
+#
+# Counts and metadata ONLY — never `valueHash`. Shipping the hashes to a
+# browser would put the one value that could be brute-forced offline into a
+# client, which defeats the reason they are hashed at all.
+GET {{baseUrl}}/admin/fraud/lists
+Authorization: Bearer {{adminToken}}
+
+### 94 — lift a listing. Deactivated, never deleted.
+POST {{baseUrl}}/admin/fraud/lists/remove
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "kind": "WATCH",
+  "entityType": "IP",
+  "value": "203.0.113.42",
+  "reason": "Volume returned to baseline; no confirmed fraud from this range."
+}
+
+### 95 — suspend an account. The heaviest control here.
+#
+# `isSuspended` is honoured by M4's transfer path AND by the risk engine's hard
+# gate, so one flag stops payments, claims, consents and device binds rather
+# than only transfers. Always audited.
+POST {{baseUrl}}/admin/fraud/users/{{userId}}/suspend
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "note": "Confirmed mule account — three inbound APP-fraud reports, funds forwarded within minutes each time."
+}
+
+### 96 — restore it.
+POST {{baseUrl}}/admin/fraud/users/{{userId}}/suspend?restore=true
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "note": "Investigation closed. The account holder was themselves a victim, not a participant."
+}
+
+
+########################################################################
+# 60 · THE MULE GRAPH (T4, T5, T9) — the ring view
+#
+# Fraud rings are visible in the RELATIONSHIPS between accounts, not in any
+# single account. Each individual account in a mule network looks ordinary: a
+# real person, real KYC, modest balances. What gives the ring away is
+# STRUCTURE — one device operating five "users" (device farming), twenty
+# accounts paying into three beneficiaries (fan-in), a chain each receiving and
+# immediately forwarding (pass-through).
+#
+# Same insight as NPCI's MuleHunter. Edges are keyed on a salted HMAC of the
+# shared artefact, so the graph can establish that A and B share a device
+# without the table recording WHICH device — structure without identifiers.
+########################################################################
+
+### 100 — force the cluster recompute. ADMIN only.
+#
+# Normally runs every 15 minutes on a schedule, because recomputing connected
+# components is a graph traversal and cannot sit inside a payment. The inline
+# path only READS one cached row.
+#
+# Staleness is the right trade: a mule ring does not form in the seconds
+# between two transfers. This endpoint exists for demos and for the first run
+# after seeding, where waiting 15 minutes is the difference between a working
+# demonstration and a blank graph.
+POST {{baseUrl}}/admin/fraud/graph/recompute
+Authorization: Bearer {{adminToken}}
+
+### 101 — the cluster around one user.
+#
+# Returns members and the edge types binding them — enough to draw the ring.
+# Never returns `sharedKeyHash`: it is unreadable to a human anyway, and
+# shipping it to a browser would hand over the one value that could be
+# brute-forced offline.
+#
+# To BUILD a cluster: have two or three users pay the SAME payee (M4 §10 + §20
+# each), or bind the same `deviceId` on two accounts, then run §100.
+GET {{baseUrl}}/admin/fraud/graph/{{userId}}
+Authorization: Bearer {{adminToken}}
+
+### 102 — a user with no links. `clusterSize: 1`, `muleScore: 0`.
+#
+# The false-positive floor, and the most important property here. A user with
+# their own devices and their own payees shares nothing with anybody and MUST
+# score zero — a graph layer that flagged ordinary users would be switched off
+# within a week.
+#
+# The calibration is pinned in `mule-graph.spec.ts` on BOTH sides: a five-user
+# device farm fires, and a two-person household sharing one tablet stays under
+# 0.3. An earlier scaling had the farm at 0.45 — below the signal floor — so
+# the graph emitted nothing for the exact pattern it exists to catch.
+GET {{baseUrl}}/admin/fraud/graph/PASTE_ISOLATED_USER_ID
+Authorization: Bearer {{adminToken}}
+
+
+########################################################################
+# 70 · CREDENTIAL STUFFING (T3) — on the login path
+#
+# Split by subject, because the two attacks look nothing alike and one counter
+# would catch neither well:
+#
+#   PER IDENTIFIER — a handful of fails on ONE account is usually somebody who
+#                    forgot. Low threshold (5/10min), soft.
+#   PER /24 NETWORK — the same volume across MANY identifiers is a bot. High
+#                    threshold (15), and past 40 it is HARD, because at forty
+#                    misses in ten minutes from one network there is no
+#                    innocent reading left.
+#
+# IPs are truncated to a /24 before hashing. A residential IP is reassigned
+# constantly, so an exact-address counter decays to noise within hours, while
+# an attacker rotating through a subnet defeats it entirely. The /24 is the
+# unit a botnet actually occupies.
+########################################################################
+
+### 110 — send a real OTP first, so there is something to get wrong.
+POST {{baseUrl}}/auth/send-otp
+Content-Type: application/json
+
+{ "phone": "9876543210", "countryCode": "91" }
+
+### 111 — a WRONG OTP. Send this SIX times.
+#
+# Every outcome is recorded as an `AuthAttempt` BEFORE the result is returned,
+# and that ordering is the whole defence: a bot spraying a leaked credential
+# dump mostly MISSES, so a system that only recorded successes would be blind
+# to the spray. The attempt is recorded whether or not the user exists, which
+# is why `AuthAttempt.userId` is nullable.
+#
+# Past five failures the `LOGIN_STUFFING` signal fires. The RESPONSE DOES NOT
+# CHANGE — deliberately. Telling a bot it has been rate-limited tells it to
+# rotate networks.
+POST {{baseUrl}}/auth/verify
+Content-Type: application/json
+
+{ "phone": "9876543210", "countryCode": "91", "otp": "000000" }
+
+### 112 — the same wrong OTP against an UNREGISTERED number.
+#
+# Still recorded, still counted against the /24. These are the most
+# interesting attempts in the table — a credential dump is mostly numbers that
+# were never customers, and a table that only logged hits would show nothing.
+POST {{baseUrl}}/auth/verify
+Content-Type: application/json
+
+{ "phone": "9000000001", "countryCode": "91", "otp": "000000" }
+
+### 113 — a provider error is recorded DISTINCTLY.
+#
+# Unset `TWILIO_AUTH_TOKEN` and send this. The attempt is logged with
+# `outcome: PROVIDER_ERROR`, not as a failed credential attempt — nobody
+# guessed wrong. Counting it as one would let a Twilio outage lock out every
+# user by inflating their failure counts.
+POST {{baseUrl}}/auth/verify
+Content-Type: application/json
+
+{ "phone": "9876543210", "countryCode": "91", "otp": "123456" }
+
+### 114 — the stuffing evidence, in the analyst console.
+# Filter assessments to LOGIN to see the decisions the auth path produced.
+GET {{baseUrl}}/admin/fraud/assessments?subjectType=LOGIN
+Authorization: Bearer {{adminToken}}
+
+
+########################################################################
+# 80 · CLAIM FRAUD (T6) — M6 inside M5
+#
+# `ClaimRiskService` kept its claims-domain signals (waiting-period proximity,
+# full-cover proportion, prior rejections) and now hands them to the same
+# engine, which adds the cross-cutting layers. That addition is not cosmetic: a
+# claim filed from a device bound minutes ago, on an account inside a mule
+# cluster, was previously INVISIBLE to claims scoring — and those are exactly
+# the signals a synthetic-identity ring produces.
+########################################################################
+
+### 120 — the forged-document path. Run m5-insurance.http §40–41 first.
+#
+# `{"tamper": true}` scores 0.92 and the claim is hard-routed to a human.
+#
+# THE TAMPER GATE IS BELT AND BRACES, on purpose. It is the heaviest claim
+# signal (0.55) AND it sets `forceReview` outright. Both, because noisy-OR puts
+# a lone 0.55 signal in the STEP_UP band — and a step-up on a forged claim is
+# meaningless, since the claimant can answer their own OTP. The explicit flag
+# is what actually stops the auto-payment.
+GET {{baseUrl}}/admin/fraud/assessments?subjectType=CLAIM
+Authorization: Bearer {{adminToken}}
+
+### 121 — a claim's fraud case.
+#
+# Note what CLEARING it does, and does not do: it clears the FRAUD question and
+# leaves the claim `UNDER_REVIEW` for an adjudicator. It does NOT approve.
+# Approving means paying out against remaining cover and checking the waiting
+# period — that authority belongs to `ClaimsService.decide`, not to a fraud
+# analyst. Only CONFIRMED_FRAUD writes a status, because a rejection moves no
+# money.
+GET {{baseUrl}}/admin/fraud/cases?status=OPEN
+Authorization: Bearer {{adminToken}}
+
+
+########################################################################
+# 81 · CONSENT FARMING (T11) — M6 inside M1
+########################################################################
+
+### 130 — create consents in bulk. Run m1-consent.http §01 repeatedly.
+#
+# Scored rather than rate-limited, because the two look identical at low volume
+# and a flat rate limit would block a legitimate user reconnecting several
+# banks in one sitting — the normal onboarding path, and the one that must stay
+# smooth.
+#
+# The check sits AFTER M1's duplicate-purpose check on purpose: a user retrying
+# the same purpose reuses the existing consent and returns early, so retries
+# never inflate the counter against them.
+#
+# Only a BLOCK is refused; anything softer proceeds. Data access is not money,
+# so a HOLD would mean a consent nobody can approve and no route out.
+GET {{baseUrl}}/admin/fraud/assessments?subjectType=CONSENT
+Authorization: Bearer {{adminToken}}
+
+
+########################################################################
+# 90 · THE PROOF
+########################################################################
+
+### 140 — the trial balance (M4). Still EXACTLY zero.
+#
+# The point: M6 holds and releases money-moving actions, and a release that
+# re-entered the ledger incorrectly would show up HERE. A `RISK_HELD`
+# transaction has NOT reserved funds, so a hold that leaked a reservation — or
+# a release that double-reserved — breaks this. It must stay at zero through
+# every hold, step-up and analyst release in this file.
+GET {{baseUrl}}/admin/payments/trial-balance
+Authorization: Bearer {{adminToken}}
+
+### 141 — every risk decision made, as a distribution.
+# `decisions24h` in the stats payload is the model's behaviour at a glance. If
+# STEP_UP dominates ALLOW, the thresholds are wrong and the product is
+# unusable; if nothing ever leaves ALLOW, the layers are not wired.
+GET {{baseUrl}}/admin/fraud/stats
+Authorization: Bearer {{adminToken}}
+
+### 142 — the audit trail.
+#
+# There is deliberately NO generic `/admin/audit` endpoint in this codebase —
+# audit trails are exposed per entity (`admin/consent/:id/audit`,
+# `admin/passport/:id/audit`), so a console can never enumerate everything
+# every user has ever done from one call. M6 follows that and exposes its trail
+# through the CASE (§63), which is the unit an analyst actually works.
+#
+# The rows themselves are written by `AuditService` under these actions:
+#
+#   risk.allow | risk.step_up | risk.review | risk.hold | risk.block
+#   device.bound | device.revoked | device.recovered | device.sim_swap_suspected
+#   stepup.issued | stepup.passed
+#   fraud.case.claimed | fraud.case.note | fraud.case.info_requested
+#   fraud.case.cleared | fraud.case.confirmed_fraud | fraud.case.escalated
+#   fraud.list.added | fraud.list.removed
+#   fraud.user.suspended | fraud.user.restored | fraud.graph.recomputed
+#   compliance.str_required
+#
+# `fraud.list.added` records the KIND and the reason but NEVER the value — an
+# audit row that quoted a listed VPA would re-introduce in plaintext exactly
+# what `valueHash` exists to avoid, in the one table guaranteed never to be
+# deleted.
+#
+# To read them directly while `prisma studio` is open:
+#   SELECT action, entity, entity_id, meta_data, created_at
+#   FROM "AuditLog" WHERE action LIKE 'risk.%' OR action LIKE 'fraud.%'
+#   ORDER BY created_at DESC LIMIT 50;
+GET {{baseUrl}}/admin/fraud/cases/{{caseId}}
+Authorization: Bearer {{adminToken}}
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  THE APP PIN AND THE BIOMETRIC — the knowledge factor, and the launch gate
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# ## Why a PIN exists when there is already an SMS OTP
+#
+# Because an OTP delivered to the same handset that is making the payment is
+# not a second factor. One compromise — a stolen unlocked phone, or malware
+# with SMS-read permission — defeats both halves at once. The code arrives on
+# the lock screen of the device the attacker is already holding.
+#
+# A PIN proves KNOWLEDGE, which possession of the handset does not confer.
+# Combined with the bound device the payment comes from, that is a genuine
+# two-factor authorisation, and it is the model every UPI app in the market
+# runs on. NPCI reached the same conclusion: UPI has never used an OTP to
+# authorise a payment, only the PIN.
+#
+# ## What this PIN is NOT, stated because confusing the two is a phishing route
+#
+# Not the UPI PIN. That is registered against the user's BANK ACCOUNT, entered
+# in NPCI's Common Library (a component only a certified PSP may embed), and
+# validated by the issuing bank's HSM. Pravaah cannot and must not see it.
+# THIS PIN authorises an instruction against the Pravaah wallet, and every
+# string the user reads says so.
+#
+# ## The enrolment order, and why it is not arbitrary
+#
+#   1. SMS OTP   — proves the SIM is in this handset. The only step that ties
+#                  the account to a device; every later factor is measured
+#                  against that tie. Sections 10-11 above.
+#   2. Biometric — recorded next, because it is what will later authorise
+#                  CHANGING the PIN. Doing it after would leave a window where
+#                  a brand-new PIN could only be changed by the weaker SMS
+#                  reset. Section 144.
+#   3. PIN       — last. Used on every payment. Section 145.
+
+### 143 — what factors does this account have?
+#
+# Read this BEFORE showing any PIN field. `enrolled` and `locked` are separate
+# booleans and both are load-bearing: an enrolled-but-locked PIN must not be
+# offered, or the field accepts six digits, rejects them, and reports the real
+# reason ("locked for 15 minutes") only after the user has spent an attempt
+# they did not have.
+#
+# `attemptsRemaining` is 5 when clean. The app shows it only once it drops —
+# "5 attempts remaining" on a fresh screen invents an anxiety nobody had.
+GET {{baseUrl}}/security/pin
+Authorization: Bearer {{token}}
+
+### 144 — record what the OS reports about local authentication.
+#
+# A CLAIM, never proof. The biometric check happens on the handset, so
+# BIOMETRIC_STRONG from a rooted device is worth exactly what that device's
+# integrity signal says it is worth. It is stored so the account has a recorded
+# second factor and the console can see which accounts genuinely have one.
+#
+# Levels mirror expo-local-authentication's SecurityLevel:
+#   NONE             — no lock screen at all. The app does not send this.
+#   SECRET           — a PIN, pattern or passcode. An enrolment, but not a
+#                      biometric one.
+#   BIOMETRIC_WEAK   — 2D face unlock. A printed photograph can defeat it.
+#   BIOMETRIC_STRONG — fingerprint, or 3D face. What a PIN change requires.
+POST {{baseUrl}}/security/biometric
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "level": "BIOMETRIC_STRONG"
+}
+
+### 145 — enrol a PIN.
+#
+# Three refusals worth trying, in the order the server applies them:
+#
+#  1. An UNBOUND DEVICE gives 403. The PIN is one half of a pair whose other
+#     half is the bound device, so enrolling from a device the server has never
+#     seen creates a factor with nothing to pair against. Run this BEFORE
+#     section 11 to see it.
+#
+#     The device gate deliberately runs FIRST, before the strength check. A
+#     live probe caught the other order: it answered "that PIN is too easy to
+#     guess" to a caller it was about to refuse anyway, which turns this into
+#     an oracle for the weak-PIN rule list. An unauthorised caller should learn
+#     exactly one thing — that they are unauthorised.
+#
+#  2. A WEAK PIN gives 400. Try 111111, 123456, 654321, 199012, 121990,
+#     121212, 123123. The rules are SERVER-side on purpose: the list is a
+#     detector specification, and shipping it to the client would tell an
+#     attacker which patterns survive, while a client check is bypassed by
+#     anyone calling the API directly.
+#
+#  3. A PIN ALREADY SET gives 409. Never a silent overwrite — that would be a
+#     PIN-change endpoint with no authentication on it, which is exactly the
+#     bypass section 149 exists to prevent.
+#
+# Try 073859 and confirm the response is a success. A leading zero MUST
+# survive: pin is a STRING in the DTO, never a number, because 012345 parsed as
+# a number becomes 12345 and locks that user out of their own account with no
+# error anywhere.
+POST {{baseUrl}}/security/pin
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "pin": "{{newPin}}",
+  "deviceId": "{{deviceId}}"
+}
+
+### 146 — confirm the PIN works, and walk it into a lockout.
+#
+# Send the correct PIN once (200). Then send a wrong one five times and watch
+# the counter: "4 attempts remaining" ... "1 attempt remaining" ... then 403
+# and locked for 15 minutes.
+#
+# THEN SEND THE CORRECT PIN AGAIN. It must still be refused. A lockout a
+# correct PIN walks straight through is not a lockout — and it is the first
+# thing an attacker grinding a stolen handset would discover.
+#
+# The counter is entirely server-side. A client-held one is a client-held
+# suggestion.
+POST {{baseUrl}}/security/pin/verify
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "pin": "{{newPin}}"
+}
+
+### 147 — the ladder now asks for the PIN instead of a code.
+#
+# With an unlocked PIN enrolled, ask for a challenge and read `method`:
+#
+#   TRANSACTION       -> PIN_REAUTH
+#   CLAIM             -> PIN_REAUTH
+#   CONSENT           -> PIN_REAUTH
+#   LOGIN             -> OTP
+#   DEVICE_RECOVERY   -> OTP
+#   DEVICE_BIND       -> OTP   (section 10, which pins it explicitly as well)
+#
+# The last three are the exclusions, and each is a specific bypass rather than
+# a style choice:
+#
+#  - DEVICE_BIND / DEVICE_RECOVERY — the SMS *is* the control. Its value is not
+#    the six digits, it is that they arrive on the SIM in the handset. A PIN
+#    says nothing about which phone holds it, so accepting one here would let a
+#    shoulder-surfed PIN bind an attacker's own device — manufacturing the
+#    possession factor that every later challenge, PIN included, is measured
+#    against.
+#  - LOGIN — a login challenge fires precisely BECAUSE the sign-in looked
+#    wrong. What is in doubt is whether the person holds the account's phone,
+#    and only the out-of-band code speaks to that.
+#
+# Then LOCK the PIN (section 146) and ask again: TRANSACTION falls back to OTP.
+# canUsePin is false while locked, and issuing a PIN challenge then would
+# produce a challenge the user provably cannot answer — the same
+# unanswerable-challenge bug the Twilio migration existed to fix, reached from
+# the other direction.
+POST {{baseUrl}}/security/step-up/request
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "purpose": "TRANSACTION",
+  "subjectId": "{{transactionId}}"
+}
+
+### 147b — answer that challenge with the PIN.
+#
+# Four things to try against one nonce, in order:
+#
+#  1. A wrong PIN gives "That PIN is not correct. 4 attempts remaining." Note
+#     the number is the PIN's budget of 5, not the challenge's 3. Both counters
+#     tick; the PIN's is the authoritative one and survives across challenges,
+#     so it is the one the user is told.
+#  2. 123456 — the DEV BYPASS OTP. It must be REFUSED. This is the single most
+#     important assertion in the section: it proves a PIN challenge is checked
+#     against the bcrypt hash and is NOT delegated to Twilio. If this ever
+#     succeeds, the PIN has silently become an OTP.
+#  3. The correct PIN passes.
+#  4. The same nonce again is refused. Single-use, enforced by a conditional
+#     UPDATE rather than by an application-level status check.
+POST {{baseUrl}}/security/step-up/verify
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "nonce": "{{nonce}}",
+  "answer": "{{newPin}}"
+}
+
+### 148 — ask for the BIOMETRIC challenge that authorises a PIN change.
+#
+# Returns method BIOMETRIC and an `assertion` — a random secret the app echoes
+# back only after the OS reports a passing fingerprint or face check.
+#
+# The assertion is what makes the nonce PROOF rather than a claim. There is
+# deliberately no biometricPassed:true field anywhere, and that absence is the
+# control: a boolean on the wire is not proof of anything, and the server has
+# no way to check one. Possession of the assertion shows the app both received
+# the challenge and reached the change call.
+#
+# The honest limit, stated: this proves the app COMPLETED a local check, not
+# that a fingerprint was presented. A hardware-attested version would have the
+# device SIGN this with a keystore key — holder-key.ts already does exactly
+# that for M3 presentations, so the primitive exists in this codebase. That is
+# the production hardening step, and it is precisely why DEVICE_INTEGRITY
+# carries a 0.45 weight: on a rooted handset this factor is weak, and the two
+# controls cover each other's gap.
+POST {{baseUrl}}/security/pin/change/request
+Authorization: Bearer {{token}}
+
+### 149 — change the PIN.
+#
+# No currentPin field, by design: the biometric proving this request is a
+# STRONGER factor than the PIN being replaced, so demanding both would add
+# friction without assurance — anybody who can pass the biometric can already
+# authorise a payment.
+#
+# The app refuses the DEVICE PASSCODE for this prompt (disableDeviceFallback,
+# plus an empty fallbackLabel on iOS), and that refusal is the whole point. The
+# dominant real threat to a payment PIN is somebody holding the unlocked
+# handset who watched the owner type the unlock code. If the passcode could
+# authorise a PIN change, that person sets a PIN only they know and the factor
+# has protected nothing — it collapses back into "can you unlock this phone",
+# which possession already answered.
+#
+# Try a reset's nonce (section 150) here. It must be refused: PIN_CHANGE and
+# PIN_RESET are separate purposes precisely so an SMS code cannot be redeemed
+# against a change. That is the bypass — read the code off the stolen handset's
+# lock screen, set your own PIN, keep the account.
+POST {{baseUrl}}/security/pin/change
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "newPin": "{{newPin}}",
+  "nonce": "{{biometricNonce}}",
+  "assertion": "{{biometricAssertion}}"
+}
+
+### 150 — ask for the SMS challenge that authorises a RESET.
+#
+# For a user who has forgotten or locked their PIN. Sent to the registered
+# number, and it is the only PIN route that uses SMS.
+POST {{baseUrl}}/security/pin/reset/request
+Authorization: Bearer {{token}}
+
+### 151 — reset the PIN, and pay for it with a 24-hour cooling-off.
+#
+# ## The reset path IS the security question
+#
+# Every PIN system needs "I forgot it", and that path is almost always an SMS
+# code — which quietly hands the stolen-phone attacker a way to simply RESET
+# the PIN and pay. The weakness the PIN was built to close, reopened one screen
+# back.
+#
+# Banks answer it with a possession factor the thief lacks: the debit card's
+# last six digits and its expiry. Pravaah has no card, so the reset instead
+# BUYS TIME — it restarts the device cooling-off, so for 24 hours afterwards
+# the risk ladder's device signals still apply and high-value transfers are
+# challenged or held. "Reset and drain" becomes "reset, then wait while
+# somebody reviews it".
+#
+# ## Verify the cooling-off actually restarted
+#
+# Read coolingOffUntil from section 9 before and after. It must jump to roughly
+# 24h from the reset moment, not stay where it was. If it does not, the reset
+# is a free bypass of the PIN and the whole factor is decorative.
+#
+# The app discloses this cost BEFORE the user commits. A user who meets the
+# friction unannounced experiences a malfunction; one who was told experiences
+# a trade-off they accepted.
+POST {{baseUrl}}/security/pin/reset
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "newPin": "{{newPin}}",
+  "nonce": "{{nonce}}",
+  "answer": "{{devOtp}}"
+}
+
+### 152 — re-issue a lapsed confirmation on a held payment.
+#
+# Not an M6 route — it lives on the transfer — but it belongs in this section
+# because the PIN is what made it necessary.
+#
+# A challenge lives five minutes and pendingFor reports only live ones. So a
+# user who left the app mid-confirmation came back to a payment sitting in
+# RISK_HELD with stepUp:null — indistinguishable from an analyst hold, showing
+# "we're reviewing this payment", with no route out and money reserved against
+# nothing. The gap predates the PIN, and the PIN makes it far more likely to be
+# hit: a PIN prompt shows no countdown, so users WILL let it lapse.
+#
+# ## Why user-initiated rather than automatic on the poll
+#
+# The obvious fix is for GET /transfers/:id to re-issue whenever it finds none
+# — and that endpoint is POLLED. On an OTP challenge that is an SMS every five
+# minutes per held transfer, for a client that is merely open.
+#
+# ## Two refusals to try
+#
+#  1. Against a payment held by an ANALYST (section 60) gives 409. RISK_HELD
+#     covers both kinds of hold and they need opposite handling; minting a
+#     challenge for an analyst hold would let the account holder release, with
+#     a code, a payment a reviewer deliberately stopped. They are told apart by
+#     evidence rather than a flag: a stepped-up transfer HAS a challenge row
+#     against its idempotency key, an analyst hold has none.
+#  2. Against a payment whose challenge burned all its attempts gives 409.
+#     Re-issuing there would turn a 3-guess cap into an unlimited one, three at
+#     a time.
+POST {{baseUrl}}/payments/transfers/{{transactionId}}/confirm/request
+Authorization: Bearer {{token}}
+
+### 153 — the launch gate: what replaced the OTP on every relaunch.
+#
+# No endpoint of its own — this is the client-side half, recorded here because
+# the behaviour change is observable through the API and anybody testing M6
+# will wonder where the launch OTP went.
+#
+# ## What was wrong before
+#
+# token-manager.ts kept tokens in module state, so every cold start had no
+# session and the user re-entered an SMS OTP. That was not a security control
+# though it wore one's clothes: an OTP on every launch trains a user to expect
+# a code, type it without reading it, and treat the arrival of one as routine —
+# which is exactly the conditioning every OTP phishing script depends on.
+#
+# ## What happens now
+#
+# The REFRESH token is stored with expo-secure-store's requireAuthentication,
+# which encrypts it under a Keychain/Keystore key the OS refuses to release
+# until it has authenticated the user. Reading it IS authenticating. On launch
+# the app exchanges it:
+#
+#   POST /auth/refresh   { "refreshToken": "..." }
+#
+# and then re-fetches GET /users/me — the profile is never persisted, because
+# kycStatus changes server-side while the app is closed and a stored copy would
+# strand a verified user on the "verify your identity" screen.
+#
+# ## Why not "authenticate, then read a normally-stored token"
+#
+# Because the check and the secret would be independent, so anything skipping
+# the check still gets the secret: extracted app storage on a rooted device, a
+# patched binary, a debugger on the JS thread. With the key gate there is
+# nothing to skip — the ciphertext is useless without the OS releasing the key.
+#
+# ## Four device classes to test, because each fails differently
+#
+#  1. NO LOCK SCREEN. canUseBiometricAuthentication() is false, so nothing is
+#     persisted and the user gets an SMS code every launch. Stated to them
+#     rather than worked around: without a lock screen there is no key to gate
+#     under, and writing a 30-day credential in the clear on a phone anyone can
+#     open is worse than the friction.
+#  2. BIOMETRIC RE-ENROLLED (add a fingerprint after signing in). The OS
+#     invalidates the key and getItemAsync returns null — identical to nothing
+#     ever having been stored. A separate ungated MARKER distinguishes them, so
+#     the user is told "your device security settings changed" instead of being
+#     dumped on a login screen for no visible reason.
+#  3. SIM SWAPPED, so the device reads SUSPECTED_SWAP. The biometric still
+#     passes, because the biometric was never about the SIM. The restore is
+#     confirmed against GET /security/devices after the exchange and refused,
+#     and the stored session is DELETED — a session the server distrusts should
+#     stop being unlockable at all.
+#  4. REVOKED FROM ANOTHER HANDSET (section 13) gives the same refusal.
+#     Honouring a local biometric after a revoke would make the panic button
+#     decorative.
+#
+# Note that INTEGRITY is deliberately not checked here. A rooted device is
+# exactly the device whose self-report is worthless, so refusing on the app's
+# own verdict would be theatre — an attacker patches it out. Integrity is a
+# server-side signal at 0.45 and does its work where it cannot be patched: on
+# the payment. A rooted handset unlocks the app and then finds every transfer
+# challenged.
+GET {{baseUrl}}/users/me
+Authorization: Bearer {{token}}

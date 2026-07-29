@@ -17,7 +17,7 @@ import { Legend } from "@/ui/primitives/Legend";
 export const metadata: Metadata = pageMetadata({
   title: "How to apply",
   description:
-    "The identity checks required to hold a Pravaah reputation passport, in the order they are enforced — what each one asks of you, what it proves, and what you need in hand.",
+    "The identity checks required to hold a MyPravaah reputation passport, in the order they are enforced — what each one asks of you, what it proves, and what you need in hand.",
   path: ROUTES.HOW_TO_APPLY,
 });
 
@@ -49,7 +49,7 @@ export default function HowToApplyPage(): ReactElement {
           rather than as a document. */}
       {/* Top-only padding: the engine-turned band closes the masthead at the
           trim edge. Bottom padding would leave it floating mid-field. */}
-      <section className="relative overflow-hidden bg-intaglio pt-16 text-reverse sm:pt-24">
+      <section className="relative overflow-clip bg-intaglio pt-16 text-reverse sm:pt-24">
         <Guilloche
           seed={0}
           bands={6}
@@ -123,7 +123,7 @@ export default function HowToApplyPage(): ReactElement {
 
               <p className="mt-9 text-[0.9375rem] leading-relaxed text-intaglio">
                 You will never be asked for a bank password, a net-banking PIN,
-                or a one-time password read out to a person. Nobody from Pravaah
+                or a one-time password read out to a person. Nobody from MyPravaah
                 will ever ask you for those.
               </p>
             </div>
@@ -179,9 +179,49 @@ export default function HowToApplyPage(): ReactElement {
                 immediately.
               </p>
 
+              {/* What follows, named. A page that stops at "then you consent"
+                  leaves the reader having completed an errand rather than
+                  arrived somewhere — and the arriving is the product. */}
+              <div className="mt-11 border-t border-reverse/20 pt-9">
+                <Legend className="text-latent">And then, in order</Legend>
+                <ol className="mt-6 flex flex-col gap-5">
+                  {[
+                    {
+                      step: "Your score is computed",
+                      body: "Usually inside a minute, and it arrives with the five things driving it and the changes that would raise it. If your history is too thin to say anything useful, you are told that rather than given a number.",
+                    },
+                    {
+                      step: "Your passport is issued",
+                      body: "The score is sealed into a signed credential bound to a key on your phone. From that moment it is yours: you decide who sees it, claim by claim, and you can revoke it.",
+                    },
+                    {
+                      step: "Somebody checks it",
+                      body: "A lender, a landlord or another person verifies the signature without calling us and without receiving the underlying data. You approve each request, and you can see afterwards exactly what left your wallet.",
+                    },
+                  ].map((item, index) => (
+                    <li key={item.step} className="flex gap-5">
+                      <span
+                        aria-hidden="true"
+                        className="field-value shrink-0 pt-0.5 text-xs text-latent"
+                      >
+                        {String(index + 1).padStart(2, "0")}
+                      </span>
+                      <span>
+                        <span className="block text-[0.9375rem] font-semibold text-reverse">
+                          {item.step}
+                        </span>
+                        <span className="mt-1.5 block text-[0.9375rem] leading-relaxed text-reverse-dim">
+                          {item.body}
+                        </span>
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+
               <div className="mt-11 flex flex-col gap-3 sm:flex-row sm:items-center">
-                <ButtonLink href={`${ROUTES.HOME}#how-it-works`} variant="reverse">
-                  How the data moves
+                <ButtonLink href={ROUTES.WHAT_IS_BUILT} variant="reverse">
+                  What is built
                 </ButtonLink>
                 <ButtonLink href={ROUTES.LEGAL.RULES} variant="quiet">
                   Read the rules
@@ -192,10 +232,11 @@ export default function HowToApplyPage(): ReactElement {
             <aside className="border border-latent-line/35 p-7 sm:p-8 notch-lg">
               <Legend className="text-latent">Not released yet</Legend>
               <p className="mt-5 text-[0.9375rem] leading-relaxed text-reverse-dim">
-                Pravaah is not on the App Store or Google Play. Nothing on this
-                page can be completed today — it describes the flow that is
-                built and working, so you know exactly what to expect when the
-                app is released.
+                Every step on this page is built and working — this is the real
+                sequence the app enforces, not a sketch of an intended one. What
+                you cannot do is complete it today: MyPravaah is not on the App
+                Store or Google Play, and the identity providers run against
+                their sandboxes until production credentials are issued.
               </p>
               <ButtonLink
                 href={buildOpenAppHref({ source: "how-to-apply" })}

@@ -65,13 +65,35 @@ export function Guilloche({
     const outerRadius = size / 2 - 6 - band * (size / 2 / (bands * 2.6));
     const innerRadius = outerRadius / lobes;
     const penOffset = innerRadius * (2.05 + band * 0.16);
-    return hypotrochoid(outerRadius, innerRadius, penOffset, lobes, 1400, size);
+    /**
+     * Samples scale with the lobe count instead of being fixed at 1,400.
+     *
+     * A hypotrochoid closes after `lobes` turns, so the segment budget that
+     * keeps the curve smooth is a function of how many turns there are — a
+     * 7-lobe rosette was being drawn with twice the segments it can resolve at
+     * any size this site renders. Seven bands at 1,400 was ~9,800 line
+     * segments per rosette, painted at 14–25% opacity behind live text, and
+     * the raster cost of that showed up as scroll hitching.
+     *
+     * 72 samples per turn is past the point where more of them change any
+     * pixel: at the largest render on the site (a 46rem box from a 400
+     * viewBox, so 1.84x) a chord is ~8px across a curve whose tightest radius
+     * is ~64px, which is a sagitta of 0.12px — a sixth of the stroke width.
+     */
+    return hypotrochoid(
+      outerRadius,
+      innerRadius,
+      penOffset,
+      lobes,
+      lobes * 72,
+      size,
+    );
   });
 
   return (
     <svg
       viewBox={`0 0 ${size} ${size}`}
-      className={cn("pointer-events-none", className)}
+      className={cn("engraved pointer-events-none", className)}
       aria-hidden="true"
       focusable="false"
     >

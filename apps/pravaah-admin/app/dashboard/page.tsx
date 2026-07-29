@@ -6,6 +6,9 @@ import { useQuery } from '@tanstack/react-query';
 
 import { useAuth } from '@/app/context/auth-context';
 import { ROUTES } from '@/features/routes';
+import { passportService } from '@/lib/api/passport/passport.service';
+import { formatMoney } from '@/lib/api/payments/money';
+import { paymentsAdminService } from '@/lib/api/payments/payments.service';
 import { scoringService } from '@/lib/api/scoring/scoring.service';
 
 /**
@@ -27,6 +30,17 @@ export default function DashboardPage() {
     queryKey: ['drift'],
     queryFn: () => scoringService.getDrift(),
   });
+  const passports = useQuery({
+    queryKey: ['passport-stats'],
+    queryFn: () => passportService.stats(),
+  });
+  /* Polled, unlike the others. The trial balance is the one figure here whose value can change
+     while an operator is looking at the page, and the one they most need to be current. */
+  const payments = useQuery({
+    queryKey: ['payment-stats'],
+    queryFn: () => paymentsAdminService.stats(),
+    refetchInterval: 60_000,
+  });
 
   const active = models.data?.find((m) => m.isActive);
   const unaudited = (models.data ?? []).filter(
@@ -40,6 +54,109 @@ export default function DashboardPage() {
         Signed in as {user?.email ?? 'admin'}
         {user?.role ? ` · ${user.role}` : ''}.
       </p>
+
+      {/*
+        ── M4: money ─────────────────────────────────────────────────────────
+        First on the page, above the reputation engine, because a broken trial balance outranks
+        every other alarm here. A drifted score distribution means future decisions are
+        questionable; an unbalanced ledger means money is currently unaccounted for.
+      */}
+      <section className="mt-8 rounded-lg border border-black/10 p-6 dark:border-white/10">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-base font-medium">Money</h2>
+            <p className="text-muted-foreground mt-1 text-sm">
+              The ledger, what the rails agreed to, and what customers have complained about (M4).
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              href={ROUTES.DASHBOARD.PAYMENTS}
+              className="bg-foreground text-background rounded-md px-4 py-2 text-sm font-medium"
+            >
+              Payments
+            </Link>
+            <Link
+              href={ROUTES.DASHBOARD.RECONCILIATION}
+              className="border-input rounded-md border px-4 py-2 text-sm font-medium"
+            >
+              Reconciliation
+            </Link>
+            <Link
+              href={ROUTES.DASHBOARD.PAYMENT_DISPUTES}
+              className="border-input rounded-md border px-4 py-2 text-sm font-medium"
+            >
+              Disputes
+            </Link>
+          </div>
+        </div>
+
+        {/*
+          A broken trial balance is not a metric with a bad value — it is proof that entries
+          reached the ledger table WITHOUT passing through the posting service, because the posting
+          service rejects any unbalanced set before writing it. So the only causes are a raw SQL
+          fix, a migration, or a direct database edit, and the correct response is to stop and
+          investigate rather than to keep trading.
+        */}
+        {payments.isSuccess && !payments.data.trialBalanceOk && (
+          <div className="mt-4 rounded-md border border-red-500/40 bg-red-500/5 p-3">
+            <div className="text-sm font-semibold text-red-700 dark:text-red-400">
+              Trial balance is broken
+            </div>
+            <p className="text-muted-foreground mt-1 text-sm">
+              Debits and credits do not net to zero. Entries reached the ledger without going
+              through the posting service — nothing else can cause this.
+            </p>
+          </div>
+        )}
+
+        {payments.data && (
+          <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Stat
+              label="Trial balance"
+              value={payments.data.trialBalanceOk ? 'zero' : 'BROKEN'}
+              hint={
+                payments.data.trialBalanceOk
+                  ? 'balanced in every currency'
+                  : 'investigate before anything else'
+              }
+              tone={payments.data.trialBalanceOk ? 'ok' : 'bad'}
+            />
+            <Stat
+              label="Waiting on a human"
+              value={String(payments.data.needsAttention)}
+              hint="unconfirmed or risk-held"
+              tone={payments.data.needsAttention > 0 ? 'warn' : 'ok'}
+            />
+            <Stat
+              label="Rail disagreements"
+              value={String(payments.data.openMismatches)}
+              hint="open mismatches"
+              tone={payments.data.openMismatches > 0 ? 'warn' : 'ok'}
+            />
+            <Stat
+              label="Open disputes"
+              value={String(payments.data.openDisputes)}
+              hint="customer claims in progress"
+              tone={payments.data.openDisputes > 0 ? 'warn' : 'ok'}
+            />
+          </div>
+        )}
+
+        {/*
+          Suspense is read from the ledger rather than summed from transaction rows. It is what the
+          platform is actually holding mid-flight; a total derived from transactions is what it
+          BELIEVES it is holding, and the trial balance exists because those two can differ.
+        */}
+        {payments.data && payments.data.suspense.length > 0 && (
+          <p className="text-muted-foreground mt-4 text-xs">
+            Held in suspense:{' '}
+            {payments.data.suspense
+              .map((entry) => formatMoney(entry.balanceMinor, entry.currency))
+              .join(' · ')}
+          </p>
+        )}
+      </section>
 
       {/* ── M2: the two things that can be wrong right now ────────────────── */}
       <section className="mt-8 rounded-lg border border-black/10 p-6 dark:border-white/10">
@@ -153,6 +270,89 @@ export default function DashboardPage() {
         >
           Open review queue
         </Link>
+      </section>
+
+      {/* ── M3: the two things that can be wrong right now ─────────────────── */}
+      <section className="mt-6 rounded-lg border border-black/10 p-6 dark:border-white/10">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-base font-medium">Passports</h2>
+            <p className="text-muted-foreground mt-1 text-sm">
+              Credentials users own, the keys that sign them, and who may verify them (M3).
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              href={ROUTES.DASHBOARD.PASSPORTS}
+              className="bg-foreground text-background rounded-md px-4 py-2 text-sm font-medium"
+            >
+              Passports
+            </Link>
+            <Link
+              href={ROUTES.DASHBOARD.ISSUER_KEYS}
+              className="border-input rounded-md border px-4 py-2 text-sm font-medium"
+            >
+              Issuer keys
+            </Link>
+            <Link
+              href={ROUTES.DASHBOARD.VERIFIERS}
+              className="border-input rounded-md border px-4 py-2 text-sm font-medium"
+            >
+              Verifiers
+            </Link>
+          </div>
+        </div>
+
+        {/*
+          No signing key is an outage of the same kind as no active model: every issuance
+          fails. A refused-presentation rate is the other: it is the shape a credential-theft
+          attempt makes, and it is invisible on a panel that only counts issuance.
+        */}
+        {passports.data && (
+          <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Stat
+              label="Live"
+              value={String(passports.data.credentials.ISSUED ?? 0)}
+              hint="presentable right now"
+              tone="ok"
+            />
+            <Stat
+              label="Signing keys"
+              value={String(passports.data.publishedKeys)}
+              hint={
+                passports.data.publishedKeys === 0
+                  ? 'none — issuance is failing'
+                  : 'published for verifiers'
+              }
+              tone={passports.data.publishedKeys === 0 ? 'bad' : 'ok'}
+            />
+            <Stat
+              label="Shares (30d)"
+              value={String(passports.data.last30Days.presentations)}
+              hint="presentations verified"
+              tone="ok"
+            />
+            <Stat
+              label="Refused (30d)"
+              value={String(passports.data.last30Days.failedPresentations)}
+              hint={`${(passports.data.last30Days.failureRate * 100).toFixed(1)}% of shares`}
+              tone={
+                passports.data.last30Days.failedPresentations === 0
+                  ? 'ok'
+                  : passports.data.last30Days.failureRate > 0.1
+                    ? 'bad'
+                    : 'warn'
+              }
+            />
+          </div>
+        )}
+
+        {passports.data?.activePartners === 0 && (
+          <p className="mt-4 text-sm text-amber-600 dark:text-amber-400">
+            No verifier is registered, so nobody can call <code>/verify</code> yet. Register one
+            to run an end-to-end verification.
+          </p>
+        )}
       </section>
 
       <section className="mt-6 rounded-lg border border-black/10 p-6 dark:border-white/10">

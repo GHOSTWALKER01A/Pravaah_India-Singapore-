@@ -5,8 +5,8 @@ import {
   Button,
   Icon,
   Legend,
+  Logo,
   Micro,
-  Rosette,
   Screen,
   Text,
   type IconName,
@@ -60,10 +60,14 @@ export default function OnboardingScreen() {
     >
       <View style={styles.sheet}>
         <View style={styles.masthead}>
-          {/* The medallion, at the one moment it is the subject rather than the
-              ground: this is the seal being shown before it is issued. */}
+          {/* The seal, at the one moment it is the subject rather than the
+              ground: the mark being shown before the credential is issued. It
+              is the logo here, not a medallion, so it draws at the display cut
+              rather than at whatever ornament happened to fit — and it is
+              decorative to a screen reader because the line below already says
+              the name. */}
           <View style={styles.seal}>
-            <Rosette size={104} petals={13} rings={8} opacity={0.85} />
+            <Logo size={132} decorative />
           </View>
 
           <Legend tone="latent">{`Welcome to ${APP_NAME}`}</Legend>

@@ -11,7 +11,7 @@ import { SmoothScroll } from "@/ui/motion/SmoothScroll";
 /*
   ── DIRECTION CONTRACT ──────────────────────────────────────────────────────
   THESIS: A banknote is state-issued trust made portable and carried by the
-  bearer — exactly Pravaah's mechanism. This site is the face of that note. It
+  bearer — exactly MyPravaah's mechanism. This site is the face of that note. It
   refuses the navy-gradient fintech landing page with a floating phone mockup,
   and equally refuses the stark white Swiss grid.
   OWN-WORLD: Cool security-rag substrate (#EEEFE7, never cream) against drenched

@@ -19,7 +19,11 @@ import { NotificationsModule } from '@/modules/notifications/notifications.modul
 import { PrismaModule } from '@/modules/database/prisma/prisma.module'
 import { SupabaseModule } from '@/modules/database/supabase/supabase.module'
 import { ConsentModule } from '@/modules/consent/consent.module'
+import { FraudModule } from '@/modules/fraud/fraud.module'
+import { InsuranceModule } from '@/modules/insurance/insurance.module'
 import { KycModule } from '@/modules/kyc/kyc.module'
+import { PassportModule } from '@/modules/passport/passport.module'
+import { PaymentsModule } from '@/modules/payments/payments.module'
 import { ScoringModule } from '@/modules/scoring/scoring.module'
 import { UsersModule } from '@/modules/users/users.module'
 
@@ -46,6 +50,17 @@ import { UsersModule } from '@/modules/users/users.module'
     KycModule,
     ConsentModule,
     ScoringModule,
+    PassportModule,
+    /**
+     * M6 before the modules that call it.
+     *
+     * Nest resolves the dependency graph regardless of array order, so this is for a
+     * human reader rather than the container: the shield is a dependency of payments and
+     * insurance, not a peer of them.
+     */
+    FraudModule,
+    PaymentsModule,
+    InsuranceModule,
   ],
   controllers: [AppController],
   providers: [

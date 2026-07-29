@@ -13,12 +13,16 @@
     "prisma:push": "prisma db push",
     "prisma:seed": "tsx prisma/seed.ts",
     "pravaah-id:backfill": "tsx scripts/backfill-pravaah-id.ts",
+    "kyc:reset": "tsx scripts/reset-kyc.ts",
     "cache:up": "docker compose up -d cache",
     "cache:down": "docker compose down",
     "cache:logs": "docker compose logs -f cache",
     "stack:up": "docker compose --profile full up -d --build",
     "stack:down": "docker compose --profile full down",
     "typecheck": "tsc --noEmit",
+    "verify:passport": "nest build && node dist/scripts/verify-passport.js",
+    "verify:money": "tsx scripts/verify-money-serialization.ts",
+    "verify:insurance": "tsx scripts/verify-insurance.ts",
     "sign:webhook": "node scripts/sign-webhook.mjs",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
@@ -30,7 +34,11 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "verify:dto": "tsx scripts/verify-dto-composition.ts",
+    "verify:phone": "tsx scripts/verify-phone.ts",
+    "repair:upi-handles": "tsx scripts/repair-upi-handles.ts",
+    "verify:tx": "tsx scripts/verify-tx-safety.ts"
   },
   "dependencies": {
     "@nestjs/cache-manager": "^3.1.3",
@@ -119,7 +127,8 @@
     "testRegex": ".*\\.spec\\.ts$",
     "moduleNameMapper": {
       "^@/(.*)$": "<rootDir>/$1",
-      "^generated/prisma/client$": "<rootDir>/../generated/prisma/client"
+      "^generated/prisma/client$": "<rootDir>/../generated/prisma/client",
+      "^(\\.{1,2}/.*)\\.js$": "$1"
     },
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
@@ -128,7 +137,10 @@
       "**/*.(t|j)s"
     ],
     "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "transformIgnorePatterns": [
+      "/node_modules/(?!jose/)"
+    ]
   },
   "main": "index.js",
   "directories": {

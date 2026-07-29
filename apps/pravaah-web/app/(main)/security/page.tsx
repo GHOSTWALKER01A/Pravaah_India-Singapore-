@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import type { ReactElement } from "react";
 
 import { SITE_CONFIG, isPlaceholder } from "@/lib/config/site";
@@ -16,7 +17,7 @@ import { Legend } from "@/ui/primitives/Legend";
 export const metadata: Metadata = pageMetadata({
   title: "Security",
   description:
-    "How a Pravaah passport resists forgery, how your financial data is protected in transit and at rest, what we deliberately do not do, and what we have not yet earned the right to claim.",
+    "How a MyPravaah passport resists forgery, how your financial data is protected in transit and at rest, what we deliberately do not do, and what we have not yet earned the right to claim.",
   path: ROUTES.SECURITY,
 });
 
@@ -38,7 +39,7 @@ export default function SecurityPage(): ReactElement {
       {/* Padding is top-only: the microtext and engine-turned band close the
           masthead at its bottom edge, the way a note's border meets the trim.
           Bottom padding here would leave them floating mid-field. */}
-      <section className="relative overflow-hidden bg-intaglio-deep pt-16 text-reverse sm:pt-24">
+      <section className="relative overflow-clip bg-intaglio-deep pt-16 text-reverse sm:pt-24">
         <Guilloche
           seed={1}
           bands={7}
@@ -120,11 +121,19 @@ export default function SecurityPage(): ReactElement {
             <p className="mt-7 text-base leading-relaxed text-intaglio sm:text-lg">
               A security page that lists only strengths is a marketing page. If
               you are deciding whether to trust us with financial data, these
-              are the facts that should weigh against us.
+              are the facts that should weigh against us. They are gaps rather
+              than refusals — the things{" "}
+              <Link
+                href={ROUTES.WHAT_IS_BUILT}
+                className="text-carmine underline decoration-carmine/40 underline-offset-4 transition-colors duration-200 hover:decoration-carmine"
+              >
+                this product is built never to do
+              </Link>{" "}
+              are a separate list, and a permanent one.
             </p>
           </div>
 
-          <dl className="mt-14 grid gap-x-14 gap-y-10 sm:grid-cols-3">
+          <dl className="mt-14 grid gap-x-14 gap-y-10 sm:grid-cols-2 lg:grid-cols-3">
             {NOT_YET.map((item) => (
               <div key={item.title}>
                 <dt className="denomination text-lg text-carmine-deep sm:text-xl">

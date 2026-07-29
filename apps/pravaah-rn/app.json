@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "parvaah-rn",
+    "name": "MyPravaah",
     "slug": "parvaah-rn",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -39,7 +39,7 @@
             "backgroundColor": "#06120E"
           },
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "imageWidth": 120
         }
       ],
       "expo-font",
@@ -48,9 +48,19 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Pravaah uses the camera to capture your selfie for the liveness check and to photograph your ID document for verification."
+          "cameraPermission": "Pravaah uses the camera to capture your selfie for the liveness check, to photograph your ID document for verification, and to scan UPI QR codes when you pay."
         }
-      ]
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Pravaah opens your photos only when you choose 'From a photo' while scanning, so it can read a UPI QR code out of a picture you already have. The picture stays on your phone — only the code inside it is checked.",
+          "cameraPermission": "Pravaah uses the camera to scan UPI QR codes when you pay."
+        }
+      ],
+      "expo-secure-store",
+      "./plugins/with-release-network-security",
+      "./plugins/with-android-ndk-version"
     ],
     "experiments": {
       "typedRoutes": true,

@@ -59,7 +59,7 @@ export function useScore(pollMs = 2500): UseScore {
     void load(false);
   }, [load]);
 
-  const compute = useCallback(async () => {
+  const compute = async () => {
     setComputing(true);
     setError(null);
     try {
@@ -76,7 +76,7 @@ export function useScore(pollMs = 2500): UseScore {
     } finally {
       if (mounted.current) setComputing(false);
     }
-  }, []);
+  };
 
   // Only PENDING is genuinely transient. Everything else waits on the user.
   const isPending = score?.state === 'PENDING';

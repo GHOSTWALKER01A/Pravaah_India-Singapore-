@@ -17,6 +17,7 @@ import {
   StatusMark,
   Text,
 } from '@/components/ui';
+import { ProfileAvatar } from '@/components/ui/profile-avatar';
 import { ROUTES } from '@/constants/routes.constants';
 import { CHECK_META } from '@/features/kyc/check-labels';
 import { CorridorPlate } from '@/features/kyc/components/country-card';
@@ -113,6 +114,7 @@ export default function VerifyScreen() {
   return (
     <Screen
       tabBar
+      showProfile
       onRefresh={async () => {
         setRefreshing(true);
         await load();

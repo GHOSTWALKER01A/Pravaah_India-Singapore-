@@ -23,6 +23,7 @@ export type IconName =
   | 'verify'
   | 'reputation'
   | 'bearer'
+  | 'pay'
   // Verification steps
   | 'card'
   | 'fingerprint'
@@ -56,6 +57,7 @@ export type IconName =
   | 'alert'
   | 'info'
   | 'lock'
+  | 'shield'
   | 'thread'
   | 'camera'
   | 'external'
@@ -63,7 +65,20 @@ export type IconName =
   | 'sandbox'
   | 'logout'
   | 'clock'
-  | 'plus';
+  | 'plus'
+  // M4 destinations: what you know about the payee.
+  | 'phone'
+  | 'scan'
+  | 'qr'
+  // Scanner instruments
+  | 'torch'
+  | 'image'
+  | 'copy'
+  // M5 — cover, the claim, and the evidence.
+  | 'cover'
+  | 'claim'
+  | 'document'
+  | 'hourglass';
 
 export interface IconProps {
   name: IconName;
@@ -327,6 +342,163 @@ function glyph(name: IconName, stroke: string, weight: number) {
         </>
       );
 
+    /**
+     * Pay: a cheque leaf still attached at its perforation.
+     *
+     * The M4 tab's glyph, and it is the surface's own object rather than a generic wallet or
+     * rupee sign. The dotted vertical run is the tear edge — the same device the counterfoil
+     * rows carry — so the bar's glyph and the content it leads to are recognisably one thing.
+     * The two ruled lines are the payee line and the amount line; the short third is the
+     * signature. Drawn, not implied: at 27dp all three read.
+     */
+    /**
+     * Pay to a phone number: a handset plate with the keypad's own three-column rule.
+     *
+     * Not a filled speech bubble and not a ringing receiver — this is the DESTINATION "a mobile
+     * number", so the glyph is the object the number belongs to, ruled like every other plate in the
+     * set. The three short rules read as a keypad at 20dp without drawing twelve keys that would
+     * turn to mud.
+     */
+    case 'phone':
+      return (
+        <>
+          <Path d="M7 2.5 H17 A1.5 1.5 0 0 1 18.5 4 V20 A1.5 1.5 0 0 1 17 21.5 H7 A1.5 1.5 0 0 1 5.5 20 V4 A1.5 1.5 0 0 1 7 2.5 Z" />
+          <Line x1={5.5} y1={6} x2={18.5} y2={6} />
+          <Line x1={5.5} y1={17.5} x2={18.5} y2={17.5} />
+          <Line x1={8.5} y1={9} x2={15.5} y2={9} strokeWidth={weight * 0.85} />
+          <Line x1={8.5} y1={12} x2={15.5} y2={12} strokeWidth={weight * 0.85} />
+          <Line x1={8.5} y1={15} x2={12.5} y2={15} strokeWidth={weight * 0.85} />
+        </>
+      );
+
+    /**
+     * A QR code: three finder squares and a fragment of the data field.
+     *
+     * The finders are what makes a QR recognisable as one — a grid of random dots is a texture, but
+     * three corner registration marks are unmistakable, and they are also the real structure of the
+     * symbol the encoder in `features/payments/qr` actually generates. The fourth corner is left open
+     * exactly as a real QR leaves it, which is the detail that stops this reading as a generic
+     * bordered square.
+     *
+     * This is the glyph for "a code" as an OBJECT — a row label, the receive card. For the ACTION of
+     * scanning, use `scan`.
+     */
+    case 'qr':
+      return (
+        <>
+          <Rect x={3} y={3} width={6.5} height={6.5} />
+          <Rect x={5.2} y={5.2} width={2.1} height={2.1} />
+          <Rect x={14.5} y={3} width={6.5} height={6.5} />
+          <Rect x={16.7} y={5.2} width={2.1} height={2.1} />
+          <Rect x={3} y={14.5} width={6.5} height={6.5} />
+          <Rect x={5.2} y={16.7} width={2.1} height={2.1} />
+          {/* The data field, in the corner a QR leaves free of finders. */}
+          <Line x1={14.5} y1={14.5} x2={14.5} y2={17} />
+          <Line x1={18} y1={14.5} x2={21} y2={14.5} />
+          <Line x1={17} y1={18} x2={17} y2={21} />
+          <Line x1={20} y1={17.5} x2={20} y2={20.5} />
+        </>
+      );
+
+    /**
+     * Copy: two offset sheets, the front one overlapping the back.
+     *
+     * Added because `receipt` was being used for this — a document with a torn edge and rule lines,
+     * which reads as "a record" and left a stray page glyph under the UPI address with no evident
+     * meaning. Two plain offset rectangles are the universal duplicate mark and cannot be mistaken
+     * for a document.
+     */
+    case 'copy':
+      return (
+        <>
+          <Rect x={9} y={3} width={12} height={12} rx={1.5} />
+          <Path d="M15 18.5 V19.5 A1.5 1.5 0 0 1 13.5 21 H4.5 A1.5 1.5 0 0 1 3 19.5 V10.5 A1.5 1.5 0 0 1 4.5 9 H5.5" />
+        </>
+      );
+
+    /**
+     * The torch: a lamp housing with a widening beam.
+     *
+     * The beam is what makes this read as a light rather than as a battery or a pen at 20dp — two
+     * diverging lines are the universal shorthand and they cost two marks.
+     */
+    case 'torch':
+      return (
+        <>
+          <Path d="M9 3 H15 V6.5 L13.8 9 H10.2 L9 6.5 Z" />
+          <Rect x={10.2} y={9} width={3.6} height={5} />
+          <Line x1={12} y1={16} x2={12} y2={21} />
+          <Line x1={8} y1={17.5} x2={6.5} y2={21} />
+          <Line x1={16} y1={17.5} x2={17.5} y2={21} />
+        </>
+      );
+
+    /**
+     * A picture from the gallery: a frame with a horizon and a sun.
+     *
+     * Deliberately the landscape convention rather than a folder or an upward arrow. "Upload" is
+     * the developer's word for this; the user is choosing a PHOTO they already took of a code, and
+     * the photo metaphor is what they will recognise.
+     */
+    case 'image':
+      return (
+        <>
+          <Rect x={3} y={5} width={18} height={14} rx={1} />
+          <Circle cx={8.5} cy={10} r={1.6} />
+          <Path d="M3 16.5 L9 11.5 L13.5 15.5 L16.5 13 L21 16.5" />
+        </>
+      );
+
+    /**
+     * The ACT of scanning: a viewfinder's four corner brackets around a small code core.
+     *
+     * `qr` was used for this and it was the wrong glyph. Six nested squares plus four data ticks is
+     * eleven marks inside a 26dp disc, and at that size they average into a grey smudge — the tab
+     * bar's most important control read as texture. Every app that gets this right (PhonePe, GPay,
+     * Paytm) draws the *viewfinder* rather than the symbol, because four corner brackets are four
+     * marks with large gaps between them and they survive any size.
+     *
+     * The brackets also say the right thing semantically: they are the frame you put a code INTO,
+     * which is the action. The 3×3 core is just enough to identify what you are framing.
+     */
+    case 'scan':
+      return (
+        <>
+          {/* Four viewfinder corners. Open on all four sides — a closed rectangle would read as a
+              card or a photo, not as an aiming frame. */}
+          <Path d="M3 8.5 V4.6 A1.6 1.6 0 0 1 4.6 3 H8.5" />
+          <Path d="M15.5 3 H19.4 A1.6 1.6 0 0 1 21 4.6 V8.5" />
+          <Path d="M21 15.5 V19.4 A1.6 1.6 0 0 1 19.4 21 H15.5" />
+          <Path d="M8.5 21 H4.6 A1.6 1.6 0 0 1 3 19.4 V15.5" />
+          {/* The code being framed: one finder and two data cells, at the largest size that still
+              leaves air inside the brackets. */}
+          <Rect x={8.6} y={8.6} width={3.4} height={3.4} />
+          <Line x1={14.6} y1={9} x2={14.6} y2={11.6} />
+          <Line x1={9.4} y1={14.6} x2={12} y2={14.6} />
+          <Line x1={14.6} y1={14.6} x2={14.6} y2={14.7} strokeLinecap="round" />
+        </>
+      );
+
+    case 'pay':
+      return (
+        <>
+          <Path d="M7.5 4.5 H20.5 V19.5 H7.5 Z" />
+          {/* The perforation the leaf is torn from — holes, not a dash pattern. */}
+          <Line
+            x1={4.5}
+            y1={5}
+            x2={4.5}
+            y2={19}
+            strokeDasharray="1.2 2.2"
+            strokeWidth={weight * 0.9}
+          />
+          {/* Payee line, amount line, signature. */}
+          <Line x1={10.5} y1={9.5} x2={17.5} y2={9.5} />
+          <Line x1={10.5} y1={13} x2={17.5} y2={13} />
+          <Line x1={10.5} y1={16.5} x2={14} y2={16.5} strokeWidth={weight * 0.85} />
+        </>
+      );
+
     /** Revoke: the data destroyed. Carmine at every call site. */
     case 'revoke':
       return (
@@ -447,6 +619,83 @@ function glyph(name: IconName, stroke: string, weight: number) {
           <Rect x={4.5} y={10.5} width={15} height={10} rx={1} />
           <Path d="M8 10.5 V7.5 A4 4 0 0 1 16 7.5 V10.5" />
           <Line x1={12} y1={14} x2={12} y2={17} />
+        </>
+      );
+
+    case 'shield':
+      return (
+        <Path d="M12 3 L4 7 V12 C4 16 7.5 19.5 12 21 C16.5 19.5 20 16 20 12 V7 Z" />
+      );
+
+    /* ── M5: cover ───────────────────────────────────────────────────────── */
+
+    /**
+     * Cover: an escutcheon with an engraved chevron.
+     *
+     * A SHIELD rather than the umbrella most insurance apps reach for, and the
+     * distinction is the world's. An umbrella is weather — a consumer metaphor about
+     * inconvenience. An escutcheon is the device stamped on a security document, and
+     * what this product actually is: an indemnity written on the same note as the
+     * passport. The chevron is engraved into it rather than laid on top, so at 20dp it
+     * still reads as a struck plate.
+     *
+     * This replaces the `lock` the insurance tab was borrowing. A padlock on a tab
+     * means "you cannot go here", which is precisely the wrong thing to say about the
+     * one product in the app built for people who are usually refused.
+     */
+    case 'cover':
+      return (
+        <>
+          <Path d="M12 2.6 L20 5.4 V11.4 C20 16.4 16.6 19.9 12 21.4 C7.4 19.9 4 16.4 4 11.4 V5.4 Z" />
+          <Path d="M8 11.2 L11 14.2 L16 8.6" />
+        </>
+      );
+
+    /**
+     * A claim: a document with a hand raised against it.
+     *
+     * Deliberately not a coin or a banknote. A claim is a REQUEST that has to be
+     * assessed, not money arriving — and an icon that promised a payout would be
+     * telling the claimant the outcome before the reviewer has seen it.
+     */
+    case 'claim':
+      return (
+        <>
+          <Path d="M5 3.5 H14 L19 8.5 V13.5" />
+          <Path d="M14 3.5 V8.5 H19" />
+          <Path d="M5 3.5 V15.5" />
+          <Path d="M8.5 20.5 V16 A1.4 1.4 0 0 1 11.3 16 V18" />
+          <Path d="M11.3 17.4 A1.4 1.4 0 0 1 14.1 17.4 V18.4" />
+          <Path d="M14.1 18 A1.4 1.4 0 0 1 16.9 18 V19.4 A2.6 2.6 0 0 1 14.3 22 H11.1 A2.6 2.6 0 0 1 8.5 19.4" />
+        </>
+      );
+
+    /** One piece of evidence: a sheet with two ruled lines and a folded corner. */
+    case 'document':
+      return (
+        <>
+          <Path d="M5.5 2.6 H14.5 L19 7.1 V21.4 H5.5 Z" />
+          <Path d="M14.5 2.6 V7.1 H19" />
+          <Line x1={8.5} y1={12} x2={16} y2={12} />
+          <Line x1={8.5} y1={15.5} x2={13.5} y2={15.5} />
+        </>
+      );
+
+    /**
+     * The waiting period: an hourglass, still running.
+     *
+     * The one control in M5 a policyholder most misunderstands, so it earns a glyph of
+     * its own rather than sharing `clock`. A clock says "a time"; an hourglass says
+     * "a period that has to elapse", which is exactly the difference between the date
+     * on a policy and the thirty days before it means anything.
+     */
+    case 'hourglass':
+      return (
+        <>
+          <Line x1={6.5} y1={2.8} x2={17.5} y2={2.8} />
+          <Line x1={6.5} y1={21.2} x2={17.5} y2={21.2} />
+          <Path d="M8 2.8 V7 L12 11.4 L16 7 V2.8" />
+          <Path d="M8 21.2 V17 L12 12.6 L16 17 V21.2" />
         </>
       );
 

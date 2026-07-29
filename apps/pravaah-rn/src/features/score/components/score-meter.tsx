@@ -81,7 +81,7 @@ function CountUp({
     <AnimatedTextInput
       editable={false}
       focusable={false}
-      // eslint-disable-next-line react-native/no-inline-styles -- animated target
+      // Inline by necessity: this is the animated target Reanimated writes into.
       style={[
         Type.value,
         { fontFamily: platformFamily(Type.value.fontFamily), color: ink },

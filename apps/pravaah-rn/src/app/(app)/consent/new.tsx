@@ -1,5 +1,5 @@
 import { router, Stack, type Href } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import * as Linking from 'expo-linking';
 
@@ -81,11 +81,12 @@ export default function NewConsentScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const preset = useMemo(
-    () => PURPOSE_PRESETS.find((x) => x.key === presetKey) ?? PURPOSE_PRESETS[0],
-    [presetKey],
-  );
-  const range = useMemo(defaultRange, []);
+  const preset =
+    PURPOSE_PRESETS.find((x) => x.key === presetKey) ?? PURPOSE_PRESETS[0];
+  // `useState`, not a bare call: `defaultRange()` reads the clock, so calling it in render
+  // would hand a different window to every render. The compiler's memoisation is a
+  // performance optimisation and cannot be relied on to freeze a value — `useState` can.
+  const [range] = useState(defaultRange);
   const { dataLife, frequency } = retentionFor(preset);
 
   async function create() {

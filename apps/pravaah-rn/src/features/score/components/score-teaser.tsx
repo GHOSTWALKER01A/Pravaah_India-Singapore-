@@ -36,7 +36,7 @@ export function ScoreTeaser({ score }: { score: ScoreResult }) {
 
   return (
     <Press
-      onPress={() => router.navigate(ROUTES.TABS.SCORE)}
+      onPress={() => router.push(ROUTES.SCORE.ROOT)}
       depth="subtle"
       radius={Radius.md}
       accessibilityRole="button"

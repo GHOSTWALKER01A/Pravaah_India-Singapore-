@@ -10,7 +10,7 @@ import { DocumentShell, ReplaceBeforeLaunch } from "@/ui/layout/DocumentShell";
 export const metadata: Metadata = pageMetadata({
   title: "Terms",
   description:
-    "The agreement between you and Pravaah: what we provide, what we ask of you, what we do not promise, and how either side ends it.",
+    "The agreement between you and MyPravaah: what we provide, what we ask of you, what we do not promise, and how either side ends it.",
   path: ROUTES.LEGAL.TERMS,
 });
 
@@ -31,7 +31,7 @@ export default function TermsPage(): ReactElement {
     <DocumentShell
       title="Terms"
       reference="Terms of use · Series A"
-      standfirst="The agreement between you and Pravaah. What we provide, what we ask of you, what we explicitly do not promise, and how either side ends it."
+      standfirst="The agreement between you and MyPravaah. What we provide, what we ask of you, what we explicitly do not promise, and how either side ends it."
     >
       <ReplaceBeforeLaunch>
         This document is not yet enforceable and must not be published as final.
@@ -45,13 +45,13 @@ export default function TermsPage(): ReactElement {
 
       <h2>1. What this covers</h2>
       <p>
-        These terms govern your use of the Pravaah website and the Pravaah mobile
+        These terms govern your use of the MyPravaah website and the MyPravaah mobile
         application. By using either, you agree to them. If you do not, do not use
         the service — nothing here requires you to.
       </p>
 
-      <h2>2. What Pravaah provides</h2>
-      <p>Pravaah is a financial reputation service. It:</p>
+      <h2>2. What MyPravaah provides</h2>
+      <p>MyPravaah is a financial reputation service. It:</p>
       <ul>
         <li>verifies your identity against authoritative sources;</li>
         <li>
@@ -64,7 +64,7 @@ export default function TermsPage(): ReactElement {
         </li>
       </ul>
       <p>
-        Pravaah is not a bank, a lender, a credit bureau, or an insurer. We do not
+        MyPravaah is not a bank, a lender, a credit bureau, or an insurer. We do not
         make lending decisions and we do not guarantee that any institution will
         accept your credential or act on it. What we provide is evidence; what
         another party does with that evidence is theirs to decide.
@@ -130,14 +130,27 @@ export default function TermsPage(): ReactElement {
         are not liable for their independent acts, and they are not our agents.
       </p>
 
-      <h2>7. Availability, and what is not built yet</h2>
+      <h2>7. Availability, and what is not a live service</h2>
       <p>
-        Identity verification and consented data collection are working today.
-        Scoring, credential issuance, partner verification, money movement and
-        insurance are in development, and nothing on this site or in the app
-        should be read as an offer of a capability that has not been released.
-        The mobile application is not published in any app store at the date of
-        these terms.
+        All eight modules of MyPravaah — identity, consent and data collection,
+        scoring, credential issuance, verification, money movement, insurance and
+        the fraud engine — are built and exercised end to end. That is a statement
+        about the software and about nothing else.
+      </p>
+      <p>
+        <strong>
+          MyPravaah does not currently operate as a licensed financial service.
+        </strong>{" "}
+        We are not a licensed Financial Information User, hold no payments licence
+        or payment service provider agreement, and have no insurance risk carrier
+        on paper. Those integrations run against provider sandboxes. No real money
+        has moved through the service, and no insurance policy issued by it is in
+        force. The mobile application is not published in any app store at the date
+        of these terms.
+      </p>
+      <p>
+        Nothing on this site or in the app should be read as an offer of a
+        regulated service, a promise of credit, or a policy of insurance.
       </p>
       <p>
         We do not promise uninterrupted availability. We may change, suspend or
@@ -147,7 +160,7 @@ export default function TermsPage(): ReactElement {
 
       <h2>8. No financial advice</h2>
       <p>
-        Nothing Pravaah produces is financial, legal or tax advice. A score is a
+        Nothing MyPravaah produces is financial, legal or tax advice. A score is a
         description of evidence, not a recommendation, and it does not entitle you
         to credit, tenancy, insurance or any other outcome.
       </p>
@@ -161,7 +174,7 @@ export default function TermsPage(): ReactElement {
 
       <h2>10. Intellectual property</h2>
       <p>
-        The service, its software, and the Pravaah name and marks remain ours.
+        The service, its software, and the MyPravaah name and marks remain ours.
         Your data remains yours; verifying and processing it under your consent
         gives us no ownership of it. A credential we issue about you is yours to
         present.
@@ -169,7 +182,7 @@ export default function TermsPage(): ReactElement {
 
       <h2>11. Suspension and termination</h2>
       <p>
-        You may stop using Pravaah at any time, revoke your consents, and ask for
+        You may stop using MyPravaah at any time, revoke your consents, and ask for
         deletion of everything we are not legally required to retain. We may
         suspend or close an account where we have reasonable grounds to believe it
         involves impersonation, fraud, sanctions exposure, or a legal obligation

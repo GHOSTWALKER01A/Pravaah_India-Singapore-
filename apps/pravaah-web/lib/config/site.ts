@@ -68,9 +68,7 @@ export const CORRIDOR = {
 } as const;
 
 export const SITE_CONFIG = {
-  name: "Pravaah",
-  /** Sanskrit — flow. Used verbatim in the wordmark legend. */
-  meaning: "flow",
+  name: "MyPravaah",
   tagline: "A financial reputation that crosses the border with you.",
 
   /**
@@ -88,8 +86,37 @@ export const SITE_CONFIG = {
     lastUpdated: "26 July 2026",
   },
 
-  /** Modules verified end-to-end today. Everything else is roadmap. */
-  liveModules: ["M0", "M1"] as const,
+} as const;
+
+/**
+ * Where the product actually is — the one place any page may read it from.
+ *
+ * This replaced a `liveModules: ["M0", "M1"]` list that every surface then
+ * paraphrased in prose, which is exactly how a site drifts: the code moved on
+ * and six sentences across four pages did not. The rule now is that no page
+ * states the stage in its own words; it renders these.
+ *
+ * The two halves are deliberately separate, because they are separate facts and
+ * conflating them is the dishonest move available here. All eight modules are
+ * finished and verified. Several of them talk to a regulated third party whose
+ * production access needs a licence, a PSP agreement or a carrier — those run
+ * against sandboxes, and saying so is not a caveat buried in a footer.
+ */
+export const STAGE = {
+  modulesBuilt: 8,
+  modulesTotal: 8,
+  /** One sentence. Used verbatim where only one sentence fits. */
+  headline:
+    "All eight modules are built and verified end-to-end. The app is not published, and the regulated rails run in sandbox.",
+  /** What is genuinely finished. */
+  built:
+    "Identity, consent and data collection, scoring, the issued credential, verification, payments, insurance and the fraud engine are complete, and each is exercised end-to-end against the real database rather than mocked.",
+  /** What is not real yet, stated without softening. */
+  pending:
+    "Nothing here is a live financial service. MyPravaah is not a licensed Financial Information User, holds no payments licence or PSP agreement, and has no insurance carrier on paper. Those integrations are finished and run against provider sandboxes. No real money has moved and no policy is in force.",
+  /** Distribution. */
+  release:
+    "The mobile app is not on the App Store or Google Play. If you find an app claiming to be MyPravaah today, it is not ours.",
 } as const;
 
 /** True for any legal value still carrying its placeholder marker. */

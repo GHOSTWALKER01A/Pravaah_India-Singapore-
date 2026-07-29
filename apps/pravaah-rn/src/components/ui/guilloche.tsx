@@ -19,7 +19,7 @@
  * These are decorative by definition, so they draw in `latentLine` — the gold that
  * is not allowed to carry information — and are hidden from the accessibility tree.
  */
-import { memo, useMemo } from 'react';
+import { memo } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 
@@ -64,6 +64,36 @@ export interface RosetteProps {
   strokeWidth?: number;
 }
 
+/**
+ * The nested rosette rings.
+ *
+ * Module scope rather than a `useMemo` in the component: it is a pure function of its three
+ * arguments, so the React Compiler memoises the call on exactly the dependencies the removed
+ * `useMemo` listed — and out here the geometry is testable without rendering anything.
+ */
+function rosettePaths(size: number, rings: number, petals: number): string[] {
+  const c = size / 2;
+  // Leave room for the amplitude so the outermost petal tip does not clip.
+  const outer = c * 0.78;
+  const amp = c * 0.16;
+  // 4 samples per petal is the floor at which the curve stops looking faceted.
+  const steps = Math.max(160, petals * 22);
+  return Array.from({ length: rings }, (_, i) => {
+    const k = i / Math.max(1, rings - 1);
+    return rosettePath(
+      c,
+      c,
+      outer * (1 - k * 0.42),
+      petals,
+      amp * (1 - k * 0.35),
+      // A phase walk of less than a full petal keeps the rings interfering
+      // instead of stacking into one thick outline.
+      (k * Math.PI * 2) / petals,
+      steps,
+    );
+  });
+}
+
 export const Rosette = memo(function Rosette({
   size,
   rings = 7,
@@ -75,28 +105,7 @@ export const Rosette = memo(function Rosette({
   const p = usePalette();
   const stroke = color ?? p.latentLine;
 
-  const paths = useMemo(() => {
-    const c = size / 2;
-    // Leave room for the amplitude so the outermost petal tip does not clip.
-    const outer = c * 0.78;
-    const amp = c * 0.16;
-    // 4 samples per petal is the floor at which the curve stops looking faceted.
-    const steps = Math.max(160, petals * 22);
-    return Array.from({ length: rings }, (_, i) => {
-      const k = i / Math.max(1, rings - 1);
-      return rosettePath(
-        c,
-        c,
-        outer * (1 - k * 0.42),
-        petals,
-        amp * (1 - k * 0.35),
-        // A phase walk of less than a full petal keeps the rings interfering
-        // instead of stacking into one thick outline.
-        (k * Math.PI * 2) / petals,
-        steps,
-      );
-    });
-  }, [size, rings, petals]);
+  const paths = rosettePaths(size, rings, petals);
 
   return (
     <Svg
@@ -156,6 +165,28 @@ export interface BandProps {
   strokeWidth?: number;
 }
 
+/** The phase-shifted copies whose interference is the moiré. Pure; see {@link rosettePaths}. */
+function bandPaths(width: number, height: number, lines: number): string[] {
+  if (width <= 0) return [];
+  const steps = Math.max(120, Math.round(width / 2));
+  const a = height * 0.17;
+  return Array.from({ length: lines }, (_, i) => {
+    const k = i / Math.max(1, lines - 1);
+    // Three incommensurable frequencies: their least common period is longer
+    // than the band, so the pattern never visibly repeats across its width.
+    return bandPath(
+      width,
+      height / 2 + (k - 0.5) * height * 0.5,
+      [
+        { amp: a, freq: 3, phase: k * Math.PI * 2 },
+        { amp: a * 0.62, freq: 7, phase: k * Math.PI * 1.3 },
+        { amp: a * 0.34, freq: 13, phase: k * Math.PI * 0.7 },
+      ],
+      steps,
+    );
+  });
+}
+
 /**
  * The interference band that runs along an edge of the note. Used on the passport
  * base and as the divider under a field region.
@@ -171,26 +202,7 @@ export const GuillocheBand = memo(function GuillocheBand({
   const p = usePalette();
   const stroke = color ?? p.latentLine;
 
-  const paths = useMemo(() => {
-    if (width <= 0) return [];
-    const steps = Math.max(120, Math.round(width / 2));
-    const a = height * 0.17;
-    return Array.from({ length: lines }, (_, i) => {
-      const k = i / Math.max(1, lines - 1);
-      // Three incommensurable frequencies: their least common period is longer
-      // than the band, so the pattern never visibly repeats across its width.
-      return bandPath(
-        width,
-        height / 2 + (k - 0.5) * height * 0.5,
-        [
-          { amp: a, freq: 3, phase: k * Math.PI * 2 },
-          { amp: a * 0.62, freq: 7, phase: k * Math.PI * 1.3 },
-          { amp: a * 0.34, freq: 13, phase: k * Math.PI * 0.7 },
-        ],
-        steps,
-      );
-    });
-  }, [width, height, lines]);
+  const paths = bandPaths(width, height, lines);
 
   if (!paths.length) return null;
 

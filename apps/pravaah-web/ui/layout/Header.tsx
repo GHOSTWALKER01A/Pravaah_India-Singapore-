@@ -80,9 +80,12 @@ export function Header(): ReactElement {
       <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-6 px-5 py-5 sm:px-8 lg:px-12">
         <Wordmark />
 
+        {/* Five items plus a wordmark and a call to action do not fit at
+            `gap-8` on a 1024px viewport — the row wraps or the CTA is pushed
+            off. The gap opens up again once there is room for it. */}
         <nav
           aria-label="Primary"
-          className="hidden items-center gap-8 lg:flex"
+          className="hidden items-center gap-5 lg:flex xl:gap-8"
         >
           {NAV_ITEMS.map((item) => (
             <Link
@@ -154,7 +157,12 @@ export function Header(): ReactElement {
       {open ? (
         <div
           id="site-menu"
-          className="absolute inset-x-0 top-full z-40 max-h-[calc(100dvh-5.5rem)] overflow-y-auto bg-intaglio pb-8 lg:hidden"
+          // The panel is taller than the viewport on a short phone, so it is
+          // its own scroller. Lenis intercepts the wheel at the window and
+          // would otherwise swallow a gesture aimed at this list; the attribute
+          // is how Lenis is told to leave a nested scroller alone.
+          data-lenis-prevent
+          className="absolute inset-x-0 top-full z-40 max-h-[calc(100dvh-5.5rem)] overflow-y-auto overscroll-contain bg-intaglio pb-8 lg:hidden"
         >
           <nav
             aria-label="Primary"

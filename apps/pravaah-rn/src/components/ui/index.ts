@@ -15,6 +15,7 @@ export { CornerMedallion, GuillocheBand, Rosette } from './guilloche';
 export { haptic } from './haptics';
 export { Header, SectionHead } from './header';
 export { Icon, type IconName } from './icon';
+export { Logo, type LogoCut, type LogoProps } from './logo';
 export { Notice, type NoticeTone } from './notice';
 export { OtpInput } from './otp-input';
 export { Field, Panel, Rule, VRule, Well } from './panel';

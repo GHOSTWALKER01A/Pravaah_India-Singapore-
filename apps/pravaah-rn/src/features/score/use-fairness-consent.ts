@@ -61,29 +61,26 @@ export function useFairnessConsent(): UseFairnessConsent {
     void load();
   }, [load]);
 
-  const save = useCallback(
-    async (request: FairnessConsentRequest) => {
-      setSaving(true);
-      setError(null);
-      try {
-        await scoreService.setFairnessConsent(request);
-        await load();
-        return true;
-      } catch (err) {
-        if (mounted.current) {
-          setError(
-            err instanceof ApiError
-              ? err.message
-              : 'Could not save your choice. Please try again.',
-          );
-        }
-        return false;
-      } finally {
-        if (mounted.current) setSaving(false);
+  const save = async (request: FairnessConsentRequest) => {
+    setSaving(true);
+    setError(null);
+    try {
+      await scoreService.setFairnessConsent(request);
+      await load();
+      return true;
+    } catch (err) {
+      if (mounted.current) {
+        setError(
+          err instanceof ApiError
+            ? err.message
+            : 'Could not save your choice. Please try again.',
+        );
       }
-    },
-    [load],
-  );
+      return false;
+    } finally {
+      if (mounted.current) setSaving(false);
+    }
+  };
 
   return { status, loading, saving, error, save, refetch: load };
 }

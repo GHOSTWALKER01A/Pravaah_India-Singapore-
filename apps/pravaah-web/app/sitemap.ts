@@ -14,6 +14,13 @@ export default function sitemap(): MetadataRoute.Sitemap {
       priority: 0.9,
     },
     {
+      // Changes whenever the build does, which is more often than the pages
+      // that describe the product's intent.
+      url: `${BASE_URL}${ROUTES.WHAT_IS_BUILT}`,
+      changeFrequency: "weekly",
+      priority: 0.85,
+    },
+    {
       url: `${BASE_URL}${ROUTES.SECURITY}`,
       changeFrequency: "monthly",
       priority: 0.8,

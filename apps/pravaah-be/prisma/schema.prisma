@@ -62,6 +62,13 @@ enum DocStatus {
 }
 
 enum DeviceStatus {
+  /**
+   * Bind requested, challenge not yet passed. M6 creates the row in this state so
+   * the step-up challenge has something to attach to, and NOTHING treats it as a
+   * bound device — `BINDING` is not `ACTIVE`, so a caller that skipped the
+   * challenge is indistinguishable from a caller with no device at all.
+   */
+  BINDING
   ACTIVE
   REVOKED
   SUSPECTED_SWAP
@@ -82,6 +89,15 @@ enum ReviewDecision {
 enum AdminRole {
   REVIEWER
   SENIOR_REVIEWER
+  /**
+   * M6 fraud analyst. Deliberately a PEER of SENIOR_REVIEWER rather than its
+   * senior: an analyst may work every fraud case but may not confirm a
+   * sanctions-derived one or add a permanent blocklist entry, which is
+   * `SENIOR_REVIEWER`/`ADMIN` territory. Declared after SENIOR_REVIEWER because
+   * Postgres sorts an enum by declaration order and the console orders queues by
+   * role seniority.
+   */
+  ANALYST
   ADMIN
 }
 
@@ -160,6 +176,614 @@ enum FactorDirection {
   NEGATIVE
 }
 
+// ── M3: The Passport (Verifiable Credential layer) ──
+enum CredentialStatus {
+  ISSUED
+  SUSPENDED
+  REVOKED
+  EXPIRED
+}
+
+enum PresentationChannel {
+  QR
+  NFC
+  DEEPLINK
+  API
+}
+
+enum CardStatus {
+  ACTIVE
+  LOST
+  REVOKED
+}
+
+enum VerifierRequestStatus {
+  PENDING
+  APPROVED
+  DECLINED
+  EXPIRED
+  CONSUMED
+}
+
+// ── M4: Cross-Border Money Movement (UPI ↔ PayNow · ledger · idempotency) ──
+// Two rails with ASYMMETRIC rules, so the corridor is a first-class field rather
+// than something inferred at the point of use: the domestic UPI cap is ₹1L/day and
+// the UPI↔PayNow cap is SGD 1,000/day, which is ~60× smaller. A limit check that
+// forgot which rail it was on would be wrong by that factor.
+enum Corridor {
+  DOMESTIC
+  CROSS_BORDER
+}
+
+enum PaymentRail {
+  /** NPCI domestic UPI. */
+  UPI
+  /** The India↔Singapore UPI↔PayNow linkage. */
+  UPI_PAYNOW
+  /** Wallet-to-wallet inside Pravaah — a ledger move with no rail leg at all. */
+  INTERNAL
+}
+
+enum TxnType {
+  P2P
+  P2M
+  REMITTANCE
+  DISBURSAL
+  REPAYMENT
+  /** M5: an insurance premium collected from the holder's wallet. */
+  PREMIUM
+  /**
+   * M5: an approved insurance claim paid INTO the holder's wallet.
+   *
+   * A first-class transaction type rather than a flag on a transfer, because a
+   * payout is the one M5 flow that moves money TOWARDS a user without them
+   * having asked for it — and the loss ratio, the reconciliation sweep and the
+   * admin book all need to select it without joining through Claim.
+   */
+  CLAIM_PAYOUT
+  /** Add money: a UPI collect raised against the user's OWN bank account. */
+  TOPUP
+  /** Wallet → the user's own verified bank account. */
+  WITHDRAWAL
+}
+
+enum TxnDirection {
+  OUTBOUND
+  INBOUND
+}
+
+/**
+ * The saga's states. Ordering here is not the transition graph — see
+ * `payments.state.ts`, which is the single authority on what may follow what.
+ */
+enum TxnStatus {
+  INITIATED
+  VALIDATED
+  RISK_HELD
+  /** A collect the payer must approve in their own PSP app. */
+  AWAITING_APPROVAL
+  RESERVED
+  SUBMITTED
+  PENDING
+  SUCCESS
+  FAILED
+  REVERSED
+  REFUNDED
+  PARTIALLY_REFUNDED
+  EXPIRED
+  /**
+   * The rail never gave a final answer inside the status-check window. NOT a
+   * synonym for FAILED: the funds stay in suspense and a human decides, because
+   * "we do not know" released as "failed" is how money gets paid twice.
+   */
+  DEEMED
+}
+
+enum LedgerDirection {
+  DEBIT
+  CREDIT
+}
+
+enum AccountType {
+  USER_WALLET
+  PLATFORM_NOSTRO
+  PLATFORM_FEE
+  FX_POSITION
+  SUSPENSE
+  EXTERNAL
+  /**
+   * Booked when a payment we had already reversed turns out to have settled and
+   * the user has since spent the refund. The money left the building, so it must
+   * appear somewhere — refusing to book it would break the trial balance, which is
+   * the one alarm that must never be silenced.
+   */
+  RECEIVABLE
+  /**
+   * M5: the insurance book. Premiums collected credit it, claim payouts debit it.
+   *
+   * Its own account type rather than a share of PLATFORM_FEE, because the LOSS
+   * RATIO — Σ claims paid ÷ Σ premiums earned — is the one number an insurer
+   * judge looks for, and it has to be readable off the ledger rather than
+   * reconstructed from two application-level sums that can drift.
+   *
+   * Permitted to run NEGATIVE (see `MAY_GO_NEGATIVE` in `ledger.service.ts`). A
+   * negative float means claims have outrun premiums, which is a real
+   * underwriting loss that must be VISIBLE. The alternative — blocking the
+   * posting — would leave an approved claim unpayable because the book was thin,
+   * which is the insurer failing its own policyholder to keep a number tidy.
+   */
+  INSURANCE_FLOAT
+}
+
+enum BeneficiaryStatus {
+  UNVERIFIED
+  VERIFIED
+  INVALID
+  BLOCKED
+}
+
+enum BeneficiaryHandleType {
+  /** A UPI ID / VPA — `name@psp`. */
+  UPI_VPA
+  /** Account number + IFSC, verified by penny-drop. */
+  ACCOUNT_IFSC
+  /** A UPI ID reachable over the UPI↔PayNow linkage (payer-initiated only). */
+  PAYNOW_UPI
+}
+
+enum ReversalStatus {
+  PENDING
+  DONE
+  FAILED
+}
+
+enum ReconStatus {
+  MATCHED
+  MISMATCH
+  RESOLVED
+  ESCALATED
+}
+
+/** Which of the three reconciliation inputs produced a record. */
+enum ReconSource {
+  WEBHOOK
+  POLL
+  STATEMENT
+}
+
+enum CollectStatus {
+  CREATED
+  PENDING
+  APPROVED
+  DECLINED
+  EXPIRED
+  FAILED
+  REVOKED
+}
+
+enum MandateStatus {
+  CREATED
+  PENDING
+  ACTIVE
+  PAUSED
+  REVOKED
+  COMPLETED
+  EXPIRED
+  FAILED
+}
+
+/** UPI AutoPay recurrence rules, as NPCI defines them. */
+enum MandateFrequency {
+  ONETIME
+  DAILY
+  WEEKLY
+  FORTNIGHTLY
+  MONTHLY
+  BIMONTHLY
+  QUARTERLY
+  HALFYEARLY
+  YEARLY
+  /** No fixed schedule; the merchant presents a debit when one is due. */
+  AS_PRESENTED
+}
+
+enum MandateAmountRule {
+  EXACT
+  MAX
+}
+
+enum MandateExecutionStatus {
+  SCHEDULED
+  /** Pre-debit notice sent. NPCI requires it ≥24h before the debit. */
+  NOTIFIED
+  DEBITED
+  FAILED
+  SKIPPED
+}
+
+/** UDIR — the UPI Dispute Resolution mechanism a customer raises in-app. */
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED_CREDITED
+  RESOLVED_REJECTED
+  WITHDRAWN
+}
+
+enum LimitWindow {
+  DAY
+  MONTH
+  YEAR
+  /** New-beneficiary cooling period — a sliding 24h, not a calendar day. */
+  ROLLING_24H
+}
+
+enum IdempotencyStatus {
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+}
+
+enum RailEventStatus {
+  RECEIVED
+  MATCHED
+  /** Arrived before we had persisted the rail reference. Replayed later. */
+  UNMATCHED
+  IGNORED
+}
+
+/**
+ * Which leg of the saga posted a ledger entry.
+ *
+ * This is not decoration: `(transaction, account, direction, leg, legRef)` is UNIQUE,
+ * so the leg name is what makes double-posting a database error rather than a silent
+ * duplicate credit. Two webhooks settling the same transaction concurrently both pass
+ * every status check we could write in application code; only the constraint stops the
+ * second one.
+ */
+enum LedgerLeg {
+  /** Wallet → suspense: the sender's funds are locked. */
+  RESERVE
+  /** Suspense → platform fee. */
+  FEE
+  /** Suspense → platform fee, the tax component (GST on the fee). */
+  TAX
+  /** Suspense(source) → fx_position(source). */
+  FX_OUT
+  /** fx_position(dest) → suspense(dest). */
+  FX_IN
+  /** Suspense → external: the money actually leaves. */
+  PAYOUT
+  /** Compensation of RESERVE — a pre-settlement failure. */
+  REVERSE
+  /** Post-settlement return of funds to the sender. */
+  REFUND
+  /** External → wallet: money arriving (a topup or an inbound credit). */
+  TOPUP
+  /** Wallet → external: money leaving to the user's OWN bank account. */
+  WITHDRAW
+  /** Booked against RECEIVABLE when a refunded payment turns out to have settled. */
+  RECOVERY
+  /** Admin correction. Always paired with an audit entry naming the human. */
+  ADJUSTMENT
+  /** M5: suspense → insurance float. The premium is earned. */
+  PREMIUM
+  /** M5: suspense → holder's wallet. An approved claim is paid. */
+  CLAIM_PAYOUT
+  /**
+   * M5: insurance float → holder's wallet. A free-look cancellation.
+   *
+   * Its own leg rather than reusing REFUND, because a premium refund unwinds a
+   * movement that never touched a rail and must never be mistaken for a rail
+   * refund by the reconciler. Carries the PremiumPayment id as `legRef`, so a
+   * policy refunded across two premium periods posts two entries instead of
+   * colliding on the unique constraint.
+   */
+  PREMIUM_REFUND
+}
+
+enum UpiHandleStatus {
+  /** Allocated, awaiting the penny-drop that proves the account is real. */
+  PENDING
+  ACTIVE
+  /** The user turned it off; the VPA is NOT recycled (see the model comment). */
+  DEACTIVATED
+  BLOCKED
+}
+
+/**
+ * What a {@link LimitCounter} row is authoritative for.
+ *
+ * In practice a VALUE row carries BOTH `usedMinor` and `usedCount`, because UPI caps
+ * value AND transaction count and a single row means one atomic UPDATE enforces both
+ * at once. Splitting them across two rows would need two statements — and a
+ * compensating rollback when the second one failed, which is a new way to lose a
+ * limit. COUNT exists for a future window that caps frequency alone.
+ */
+enum LimitScope {
+  VALUE
+  COUNT
+}
+
+/** A UDIR dispute category, as a customer would actually describe the problem. */
+enum DisputeKind {
+  /** Debited, never credited to the payee. The most common real complaint. */
+  NOT_CREDITED
+  /** Debited twice for one intended payment. */
+  DUPLICATE_DEBIT
+  /** Correct amount, wrong payee (a mistyped VPA the user confirmed). */
+  WRONG_BENEFICIARY
+  /** Credited an amount different from the one authorised. */
+  AMOUNT_MISMATCH
+  /** The user says they never authorised this at all — a fraud claim. */
+  UNAUTHORISED
+  /** Merchant dispute: goods/services not delivered. */
+  CHARGEBACK
+}
+
+enum QrKind {
+  /**
+   * Amount-less and reusable — a shopfront sticker. The payer types the amount, so
+   * the QR itself is not a payment instruction and cannot be "spent".
+   */
+  STATIC
+  /**
+   * Amount-bearing, single-use, short-lived. Because it IS a payment instruction,
+   * it is signed and its reference is consumed on first success.
+   */
+  DYNAMIC
+}
+
+enum ReversalKind {
+  /** Pre-submission compensation: release the reserve. No rail leg involved. */
+  RESERVE_RELEASE
+  /** Post-settlement return of the full amount. */
+  REFUND
+  /** Post-settlement return of part of the amount. */
+  PARTIAL_REFUND
+  /** Forced by the rail / a dispute outcome rather than by us. */
+  CHARGEBACK
+}
+
+// ── M5: Micro-Insurance (usage-based cover · reputation-priced · claims) ──
+// M2 produced an explainable score. M4 can move money. M5 is what turns the two
+// into a SECOND PRODUCT off one reputation: usage-based micro-insurance, priced
+// from consented behaviour for a population insurers currently price blindly or
+// refuse outright.
+//
+// The enums here carry the insurance-specific rules that the models cannot:
+// which covers exist, how a risk tier maps to a price, and — most importantly —
+// the three lifecycles whose edges are the anti-adverse-selection controls.
+
+/**
+ * The three covers.
+ *
+ * `INCOME_PROTECTION` is the core product: a migrant worker's wage-loss buffer,
+ * the thing no insurer sells them today. The other two exist because a platform
+ * that can only price one product has not proven it is a platform.
+ */
+enum InsuranceProductType {
+  INCOME_PROTECTION
+  HEALTH_TOPUP
+  TRAVEL_ACCIDENT
+}
+
+enum PremiumFrequency {
+  ONE_TIME
+  MONTHLY
+}
+
+/**
+ * The underwriting verdict.
+ *
+ * `DECLINE` is a tier rather than an error, and that distinction is deliberate:
+ * a decline is a PRICED decision with a reason and a route back to eligibility,
+ * so it is recorded as a quote the user can be shown and coached from — not a
+ * 4xx that leaves them with nothing to act on.
+ */
+enum RiskTier {
+  PREFERRED
+  STANDARD
+  SUBSTANDARD
+  DECLINE
+}
+
+/**
+ * A quote's lifecycle. Named `InsuranceQuoteStatus`, not `QuoteStatus`, because
+ * M4 already owns {@link FxQuote} and the word "quote" unqualified means a
+ * locked FX price everywhere else in this schema.
+ */
+enum InsuranceQuoteStatus {
+  DRAFT
+  PRICED
+  DECLINED
+  EXPIRED
+  CONVERTED
+}
+
+/**
+ * A policy's lifecycle.
+ *
+ * `PENDING_PAYMENT` is the state that makes the module honest: cover is bound
+ * only once the first premium has actually settled on the ledger. An
+ * implementation that activated on intent would be insuring people who never
+ * paid — and would discover it at claim time, which is the worst possible moment
+ * for both sides.
+ *
+ * `GRACE` exists for the mirror reason: a missed recurring premium must not
+ * silently void cover on the day it is missed.
+ */
+enum PolicyStatus {
+  PENDING_PAYMENT
+  ACTIVE
+  GRACE
+  LAPSED
+  CANCELLED
+  EXPIRED
+}
+
+enum ClaimStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  INFO_REQUESTED
+  APPROVED
+  /** The payout has settled on the M4 ledger. Only reachable from APPROVED. */
+  PAID
+  REJECTED
+  WITHDRAWN
+}
+
+/** A claim document's verification state after OCR + tamper analysis. */
+enum ClaimDocStatus {
+  UPLOADED
+  OCR_DONE
+  VERIFIED
+  /** Tamper score over the block threshold. Hard-routes the claim to a human. */
+  SUSPECT
+  REJECTED
+}
+
+enum ClaimDecision {
+  APPROVE
+  REJECT
+  REQUEST_INFO
+}
+
+// ── M6: Fraud & Risk ────────────────────────────────────────────────────────
+/** What an assessment was about. `subjectId` is meaningless without it. */
+enum RiskSubjectType {
+  TRANSACTION
+  CLAIM
+  LOGIN
+  DEVICE_BIND
+  CONSENT
+  PAYOUT
+}
+
+/**
+ * The four outcomes, plus the shadow one.
+ *
+ * Ordered least- to most-restrictive because the decision ladder picks the FIRST
+ * band a score falls into and the console sorts queues by severity. `REVIEW` is
+ * an ALLOW that also samples the action for post-hoc analysis — the user is not
+ * stopped, which is why it sits below `STEP_UP`.
+ */
+enum RiskDecision {
+  ALLOW
+  REVIEW
+  STEP_UP
+  HOLD
+  BLOCK
+}
+
+enum StepUpMethod {
+  OTP
+  BIOMETRIC
+  /**
+   * Re-authentication with the app PIN. Note what this is NOT: the UPI PIN.
+   * That is entered in the bank's own secure component and never reaches us —
+   * see M4. This is our own app-level factor.
+   */
+  PIN_REAUTH
+}
+
+enum StepUpStatus {
+  PENDING
+  PASSED
+  FAILED
+  EXPIRED
+}
+
+/**
+ * Why a challenge was issued. Load-bearing, not descriptive: a challenge issued
+ * to bind a device must not be replayable to release a held transfer, so
+ * `StepUpService.verify` requires the purpose to match what the caller expects.
+ */
+enum StepUpPurpose {
+  DEVICE_BIND
+  DEVICE_RECOVERY
+  TRANSACTION
+  CLAIM
+  LOGIN
+  CONSENT
+  /**
+   * Authorising a PIN change. Always a BIOMETRIC challenge.
+   *
+   * Distinct from `PIN_RESET` on purpose: a change is proved by a factor STRONGER than the PIN
+   * being replaced, a reset by a weaker one. Sharing a purpose would let a reset's SMS
+   * challenge be redeemed against a change, which is the whole bypass — read the code from the
+   * stolen phone, set your own PIN.
+   */
+  PIN_CHANGE
+  /**
+   * Authorising a PIN reset for somebody who has forgotten it. Always an SMS challenge, and it
+   * costs a 24-hour device cooling-off — the price of the reset not being a way around the PIN.
+   */
+  PIN_RESET
+}
+
+enum DeviceEventType {
+  BIND
+  BIND_FAILED
+  LOGIN
+  SIM_CHANGE
+  TOKEN_REFRESH
+  REVOKE
+  SUSPECTED_SWAP
+  RECOVERED
+  INTEGRITY_FAIL
+}
+
+enum FraudCaseStatus {
+  OPEN
+  INVESTIGATING
+  INFO_REQUESTED
+  CLEARED
+  CONFIRMED_FRAUD
+  ESCALATED
+}
+
+/** Declaration order IS the sort order — `orderBy: desc` must yield CRITICAL first. */
+enum FraudSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum EntityLinkType {
+  SHARED_DEVICE
+  SHARED_BENEFICIARY
+  SHARED_VPA
+  SHARED_IP
+}
+
+enum ListKind {
+  /** Watch only — contributes a weighted signal, never a hard block. */
+  WATCH
+  BLOCK
+  MULE
+  SANCTIONS
+}
+
+enum ListEntityType {
+  USER
+  DEVICE
+  VPA
+  BENEFICIARY
+  IP
+  MOBILE
+}
+
+enum VelocityDimension {
+  TXN_COUNT
+  TXN_VALUE
+  NEW_BENEFICIARY
+  LOGIN
+  CONSENT
+  STEP_UP_FAIL
+}
+
 // ============================================================================
 // MODELS
 // ============================================================================
@@ -196,23 +820,136 @@ model User {
   scores             Score[]
   protectedAttribute ProtectedAttribute?
 
+  // ── M3: The Passport (verifiable credentials the user owns) ──
+  credentials      Credential[]
+  verifierRequests VerifierRequest[]
+  // Requests this user RAISED by scanning somebody else's passport. A separate
+  // relation because the same table holds both sides of a peer check, and the
+  // holder's inbox and the scanner's outbox must never be one query.
+  scansRequested   VerifierRequest[] @relation("PeerScanRequester")
+  passportCard     PassportCard?
+
+  // ── M4: Cross-border money movement ──
+  transactions    Transaction[]
+  beneficiaries   Beneficiary[]
+  upiHandles      UpiHandle[]
+  limitCounters   LimitCounter[]
+  mandatesPayer   Mandate[]
+  collectRequests CollectRequest[]
+  disputes        PaymentDispute[]
+  idempotencyKeys IdempotencyRecord[]
+  paymentQrs      PaymentQr[]
+  fxQuotes        FxQuote[]
+
+  // ── M5: Micro-insurance ──
+  insuranceQuotes InsuranceQuote[]
+  policies        Policy[]
+  claims          Claim[]
+
+  // ── M6: Fraud & Risk (the cross-cutting shield) ──
+  riskAssessments  RiskAssessment[]
+  deviceEvents     DeviceEvent[]
+  stepUps          StepUpChallenge[]
+  fraudCases       FraudCase[]
+  velocityCounters VelocityCounter[]
+  authAttempts     AuthAttempt[]
+  /**
+   * Graph edges where this user is the LEFT node. There is deliberately no
+   * inverse relation for `EntityLink.linkedUserId`: an edge is written once from
+   * the observing side and the async component job walks it in both directions,
+   * so a second relation would only invite a query that double-counts every
+   * edge it touches.
+   */
+  entityLinks      EntityLink[]     @relation("linkOwner")
+  graphNodeScore   GraphNodeScore?
+  /**
+   * The transaction PIN and biometric enrolment.
+   *
+   * A separate row rather than columns here, precisely so a `findUnique({ where })` with no
+   * `select` — of which this codebase has ten — cannot pull a credential hash into memory.
+   */
+  credential       UserCredential?
+  // NOTE: there is deliberately no `ledgerAccounts` relation. A ledger account's
+  // owner is a user, a beneficiary, or nobody at all (the platform's own accounts),
+  // so ownership is one polymorphic text key rather than three nullable foreign
+  // keys — see {@link LedgerAccount}.
+
   @@index([kycStatus])
 }
 
+/**
+ * A device a user has bound to their account. M6 owns this model's lifecycle
+ * (`DeviceTrustService`); M4's risk scoring only reads it.
+ *
+ * The state machine: `BINDING → ACTIVE` on a passed challenge, `ACTIVE →
+ * SUSPECTED_SWAP` on a SIM-serial mismatch or a telco flag, and `→ REVOKED` from
+ * anywhere on a user or analyst revoke. Only `ACTIVE` is a bound device.
+ */
 model Device {
-  id               String       @id @default(uuid()) @db.Uuid
-  userId           String       @map("user_id") @db.Uuid
-  deviceId         String       @map("device_id") @db.Uuid // hashed hardware id
-  platform         String       @map("platform")
-  bindingTokenHash String       @map("token_hash")
-  simSerialHash    String?      @map("sim_serial_hash") // for swap detection
-  status           DeviceStatus @default(ACTIVE)
-  lastSeenAt       DateTime     @default(now()) @map("last_seen_at") @db.Timestamptz()
-  createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz()
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /**
+   * The device's own installation identifier, as the app reports it.
+   *
+   * A UUID because that is what the client generates and sends (`z.uuid()` in
+   * every DTO that accepts one) — it is NOT a hash, despite what this column was
+   * once commented as. Hashing happens where it actually buys privacy: the
+   * cross-user `EntityLink` graph stores a salted HMAC of this value, so a
+   * shared-device edge between two accounts never exposes either device id.
+   */
+  deviceId String @map("device_id") @db.Uuid
+  platform String @map("platform")
+
+  /**
+   * Hash of the current binding token. ROTATED on refresh (`tokenRotatedAt`), so
+   * a token captured once has a bounded useful life rather than an account's.
+   */
+  bindingTokenHash String    @map("token_hash")
+  tokenRotatedAt   DateTime? @map("token_rotated_at") @db.Timestamptz()
+
+  /**
+   * Salted hash of the SIM serial (ICCID) seen at bind time — the anchor for
+   * swap detection. A hash rather than the serial itself: it only ever needs to
+   * be compared for equality, and an ICCID identifies a subscriber.
+   */
+  simSerialHash String? @map("sim_serial_hash")
+
+  /** ROOTED | EMULATOR | OK | UNKNOWN, from the app's attestation check. */
+  integrity String @default("UNKNOWN") @map("integrity")
+
+  status DeviceStatus @default(BINDING)
+
+  /**
+   * While this is in the future, high-value actions from this device face extra
+   * scrutiny even when nothing else is wrong.
+   *
+   * Set on a fresh bind and re-set on a SIM-swap recovery, because the pattern
+   * being defended against is not a new device — it is a new device that
+   * immediately moves money. An attacker who phishes an OTP and binds their own
+   * handset still hits this wall on the first large transfer.
+   */
+  coolingOffUntil DateTime? @map("cooling_off_until") @db.Timestamptz()
+
+  /**
+   * Consecutive failed bind challenges. A bind is an authentication surface like
+   * any other, so it gets a lockout rather than unlimited attempts.
+   */
+  failedBindAttempts Int @default(0) @map("failed_bind_attempts")
+
+  boundAt         DateTime? @map("bound_at") @db.Timestamptz()
+  swapDetectedAt  DateTime? @map("swap_detected_at") @db.Timestamptz()
+  revokedAt       DateTime? @map("revoked_at") @db.Timestamptz()
+  /** Free-text attribution for a revoke: "user", "analyst:<id>", "telco". */
+  revokedReason   String?   @map("revoked_reason")
+  lastSeenAt      DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz()
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  user   User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  events DeviceEvent[]
 
   @@unique([userId, deviceId])
+  @@index([status])
 }
 
 model KycProfile {
@@ -311,6 +1048,17 @@ model AdminUser {
 
   reviews        ReviewCase[]
   scoreOverrides ScoreOverride[]
+  // M5: claim adjudications. A payout is money leaving on a human's judgement,
+  // so the decision is attributed by FOREIGN KEY rather than by a loose id
+  // string — an unattributable approval is indistinguishable from a fraudulent
+  // one after the fact.
+  claimDecisions Claim[]
+  // M6: fraud cases. Same reasoning as `claimDecisions` and it matters more here,
+  // because clearing a case RELEASES money an automated control had stopped. An
+  // unattributable release is the single most useful thing an insider could do.
+  fraudCases     FraudCase[]
+  fraudCaseNotes FraudCaseNote[]
+  listEntries    ListEntry[]
 }
 
 // Replay protection for provider webhooks (unique per provider event id)
@@ -500,6 +1248,8 @@ model Score {
   factors      ScoreFactor[]
   improvements ScoreImprovement[]
   overrides    ScoreOverride[]
+  // M3: every credential names the exact score it certifies.
+  credentials  Credential[]
 
   // Idempotent caching + concurrency safety: two simultaneous computes on the
   // same inputs collapse onto one row instead of racing.
@@ -603,6 +1353,1943 @@ model ScoreOverride {
 
   @@index([scoreId])
   @@index([adminId])
+}
+
+// ============================================================================
+// M3 — THE PASSPORT (Verifiable Credential layer)
+// ============================================================================
+// M2 produced a score that lives in OUR database. M3 issues it to the user as a
+// credential THEY own: signed, tamper-evident, selectively disclosable, revocable,
+// and verifiable offline. Nothing here stores a raw financial record — only the
+// derived score and its provenance ever enter a credential.
+
+// ── issuer signing keys (rotation-aware; our "ICAO PKD") ────────────────────
+model IssuerKey {
+  id String @id @default(uuid()) @db.Uuid
+  // Fully-qualified key id, e.g. `did:web:pravaah.app#key-1730000000`. It is
+  // embedded in every JWS header, so it must never be reused for a new key.
+  kid String @unique
+  alg String @default("ES256")
+
+  publicJwk Json @map("public_jwk") @db.Json
+  // The private key, field-encrypted (AES-256-GCM) exactly like every other
+  // secret we hold. It never leaves this process in the clear.
+  privateKeyEnc String @map("private_key_enc")
+
+  // Exactly one key signs at a time. Rotated keys stay in the DID document and
+  // JWKS FOREVER (until `retiredAt`), because credentials they signed are still
+  // in the wild and must keep verifying — that is the whole point of rotation
+  // rather than replacement.
+  isActive  Boolean   @default(false) @map("is_active")
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  rotatedAt DateTime? @map("rotated_at") @db.Timestamptz()
+  // Set only once every credential this key signed has expired. Until then,
+  // dropping it from the JWKS would break live passports.
+  retiredAt DateTime? @map("retired_at") @db.Timestamptz()
+
+  credentials Credential[]
+  statusLists StatusList[]
+
+  @@index([isActive])
+}
+
+// ── the credential itself ──────────────────────────────────────────────────
+model Credential {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  // Provenance: the exact M2 score this credential certifies. A credential with
+  // no score behind it is an unfalsifiable assertion, which is the one thing a
+  // reputation passport must never be.
+  scoreId     String @map("score_id") @db.Uuid
+  issuerKeyId String @map("issuer_key_id") @db.Uuid
+
+  vct              String
+  credentialNumber String @unique @map("credential_number")
+
+  // ── holder binding ──
+  // `did:key` derived from the holder's device public key.
+  subjectDid String @map("subject_did")
+  // RFC 7638 JWK thumbprint — a stable, canonical fingerprint of the same key.
+  // Indexed so "is this device already carrying a passport?" is one lookup that
+  // does not depend on JSON key ordering.
+  holderJwkThumbprint String @map("holder_jwk_thumbprint")
+  holderPublicJwk     Json   @map("holder_public_jwk") @db.Json
+  deviceLabel         String? @map("device_label")
+
+  // The issued SD-JWT and the salted cleartext disclosures, both field-encrypted.
+  // We hold them so a user who reinstalls can restore their wallet; the holder's
+  // PRIVATE key is not here, so a breach of this table still yields credentials
+  // nobody can present.
+  sdJwtEnc       String @map("sd_jwt_enc")
+  disclosuresEnc String @map("disclosures_enc")
+  // Which claims exist, WITHOUT their values. Lets the wallet and the console
+  // render a disclosure picker without decrypting anything.
+  claimKeys      String[] @map("claim_keys")
+
+  status          CredentialStatus @default(ISSUED)
+  statusListId    String           @map("status_list_id") @db.Uuid
+  statusListIndex Int              @map("status_list_index")
+
+  dataRails     String[]   @map("data_rails")
+  passportBound Boolean    @default(false) @map("passport_bound")
+  // Denormalised so admin oversight can filter and count without decrypting a
+  // single credential. The authoritative copy is inside the signed SD-JWT.
+  scoreBand     ScoreBand? @map("score_band")
+
+  // Re-issue chain. A new passport supersedes the previous one rather than
+  // silently replacing it, so the audit trail can answer "which credential was
+  // live on this date?".
+  supersedesId String?     @unique @map("supersedes_id") @db.Uuid
+  supersedes   Credential? @relation("CredentialChain", fields: [supersedesId], references: [id], onDelete: SetNull)
+  supersededBy Credential? @relation("CredentialChain")
+
+  issuedAt     DateTime  @default(now()) @map("issued_at") @db.Timestamptz()
+  // Never later than the consent's data life: a credential may not outlive the
+  // permission that produced the number inside it.
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz()
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz()
+  revokeReason String?   @map("revoke_reason")
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  score      Score      @relation(fields: [scoreId], references: [id])
+  issuerKey  IssuerKey  @relation(fields: [issuerKeyId], references: [id])
+  statusList StatusList @relation(fields: [statusListId], references: [id])
+
+  presentations    Presentation[]
+  verifierRequests VerifierRequest[]
+  cards            PassportCard[]
+
+  // A status-list position belongs to exactly one credential, forever. Reusing
+  // an index would silently transfer one credential's revocation to another.
+  @@unique([statusListId, statusListIndex])
+  @@index([userId, status])
+  @@index([status, expiresAt])
+  @@index([holderJwkThumbprint])
+}
+
+// ── revocation: W3C Bitstring Status List ──────────────────────────────────
+model StatusList {
+  id      String @id @default(uuid()) @db.Uuid
+  uri     String @unique
+  purpose String @default("revocation")
+
+  // gzip + base64url of the raw bitstring. Published as a whole, so a verifier
+  // checking one credential downloads the status of every credential — that
+  // "herd privacy" is why the list is deliberately far larger than our user base.
+  encodedList String @map("encoded_list")
+  size        Int    @default(131072)
+  // Monotonic allocation cursor. A `count()` would race under concurrent issuance
+  // and would recycle indices after a delete; a cursor cannot.
+  nextIndex   Int    @default(0) @map("next_index")
+  version     Int    @default(1)
+
+  // The list served to verifiers as a SIGNED status-list credential, so a
+  // network attacker cannot un-revoke a credential by tampering with the
+  // response body. Regenerated on every bit flip.
+  signedJwt   String? @map("signed_jwt")
+  issuerKeyId String? @map("issuer_key_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  issuerKey   IssuerKey?   @relation(fields: [issuerKeyId], references: [id])
+  credentials Credential[]
+}
+
+// ── registered verifiers (M7 partners) ─────────────────────────────────────
+model VerifierPartner {
+  id   String @id @default(uuid()) @db.Uuid
+  name String
+  // The identifier that MUST appear as the KB-JWT `aud`. Binding a presentation
+  // to one audience is what stops a lender replaying it at a different lender.
+  audience String @unique
+  // sha256 of the API key. The key itself is shown once, at registration.
+  apiKeyHash String @unique @map("api_key_hash")
+
+  contactEmail String? @map("contact_email")
+  country      String? @db.VarChar(2)
+  isActive     Boolean @default(true) @map("is_active")
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  lastUsedAt DateTime? @map("last_used_at") @db.Timestamptz()
+
+  requests      VerifierRequest[]
+  presentations Presentation[]
+}
+
+// ── the verifier↔holder handshake behind a card tap or QR scan ─────────────
+model VerifierRequest {
+  id        String  @id @default(uuid()) @db.Uuid
+  partnerId String? @map("partner_id") @db.Uuid
+  audience  String
+  purpose   String
+  template  String?
+  requestedClaims String[] @map("requested_claims")
+
+  // Single-use challenge. Its lifecycle IS the replay defence: a nonce can only
+  // travel PENDING → APPROVED → CONSUMED once.
+  nonce   String              @unique
+  channel PresentationChannel @default(QR)
+  status  VerifierRequestStatus @default(PENDING)
+
+  // Resolved holder. Bound at creation when the verifier scanned a card, or on
+  // approval when the holder picked the request up from a deep link.
+  userId       String? @map("user_id") @db.Uuid
+  credentialId String? @map("credential_id") @db.Uuid
+  cardRef      String? @map("card_ref")
+
+  // ── peer verification: one holder checking another ──
+  // The user who RAISED this request by scanning. Null for every partner request,
+  // set for every peer one — which is also how the two are told apart when
+  // scoping a result read, since a peer request has no partner to scope to.
+  //
+  // It exists so the holder's consent prompt can name a PERSON. "Someone is
+  // asking to see your score" is not a decision anybody can make; "Arjun Sharma,
+  // India, is asking" is. Nothing about the scanner is disclosed beyond what the
+  // holder needs to identify who is standing in front of them.
+  requestedByUserId String? @map("requested_by_user_id") @db.Uuid
+  requestedBy       User?   @relation("PeerScanRequester", fields: [requestedByUserId], references: [id], onDelete: SetNull)
+
+  presentationId String? @unique @map("presentation_id") @db.Uuid
+  declineReason  String? @map("decline_reason")
+  // The verification verdict, cached at approval time. The verifier's poll reads
+  // this rather than re-verifying, so collecting a result is idempotent and a
+  // slow verifier cannot re-run inference-free work on every poll.
+  resultJson     Json?   @map("result_json") @db.Json
+
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz()
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  respondedAt DateTime? @map("responded_at") @db.Timestamptz()
+  consumedAt  DateTime? @map("consumed_at") @db.Timestamptz()
+
+  partner      VerifierPartner? @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  user         User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  credential   Credential?      @relation(fields: [credentialId], references: [id], onDelete: Cascade)
+  presentation Presentation?    @relation(fields: [presentationId], references: [id], onDelete: SetNull)
+
+  @@index([status, expiresAt])
+  @@index([userId, status])
+  // The scanner's outbox: "what did I ask for, and did they answer yet".
+  @@index([requestedByUserId, status])
+}
+
+// ── presentation log: transparency for the holder, audit for us ────────────
+model Presentation {
+  id           String @id @default(uuid()) @db.Uuid
+  credentialId String @map("credential_id") @db.Uuid
+  partnerId    String? @map("partner_id") @db.Uuid
+
+  verifierAudience String   @map("verifier_audience")
+  disclosedClaims  String[] @map("disclosed_claims")
+  channel          PresentationChannel
+  nonce            String
+
+  // What the verification actually concluded. Logged even on failure: a run of
+  // failed presentations against one credential is exactly the signal a fraud
+  // review needs, and discarding it would hide the attack.
+  kbVerified    Boolean @default(false) @map("kb_verified")
+  valid         Boolean @default(false)
+  failureReason String? @map("failure_reason")
+
+  presentedAt DateTime @default(now()) @map("presented_at") @db.Timestamptz()
+
+  credential Credential       @relation(fields: [credentialId], references: [id], onDelete: Cascade)
+  partner    VerifierPartner? @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  request    VerifierRequest?
+
+  @@index([credentialId, presentedAt])
+  @@index([verifierAudience])
+}
+
+// ── the physical companion card (ISO ID-1, TD1-style) ──────────────────────
+model PassportCard {
+  id String @id @default(uuid()) @db.Uuid
+  // The card belongs to the PERSON, not to one credential. A refreshed score
+  // mints a new credential; the plastic in the user's wallet must keep working,
+  // so the card is re-pointed rather than reprinted.
+  userId String @unique @map("user_id") @db.Uuid
+  credentialId String? @map("credential_id") @db.Uuid
+
+  cardSerial String @unique @map("card_serial")
+  // The reference token physically printed/encoded on the card. Opaque, stable
+  // for the life of the card, and NOT the credential: scanning it reveals
+  // nothing until the holder's device approves the resulting request.
+  qrPayloadRef String @unique @map("qr_payload_ref")
+  verifyUrl    String @map("verify_url")
+
+  // The printed TD1 machine-readable zone, stored so a replacement card is
+  // byte-identical to the original.
+  mrzLine1 String @map("mrz_line1")
+  mrzLine2 String @map("mrz_line2")
+  mrzLine3 String @map("mrz_line3")
+
+  nfcWritten Boolean    @default(false) @map("nfc_written")
+  status     CardStatus @default(ACTIVE)
+
+  issuedAt       DateTime  @default(now()) @map("issued_at") @db.Timestamptz()
+  lastVerifiedAt DateTime? @map("last_verified_at") @db.Timestamptz()
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  credential Credential? @relation(fields: [credentialId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+}
+
+// ============================================================================
+// M4 — CROSS-BORDER MONEY MOVEMENT (UPI ↔ PayNow · ledger · idempotency)
+// ============================================================================
+// M3 made a person's reputation trustworthy across borders. M4 is what ACTS on
+// that trust: it moves money. Nothing else in the product can lose a rupee, so
+// the schema itself carries the invariants rather than trusting the services to
+// remember them:
+//
+//  1. Every amount is a BigInt in MINOR UNITS (paise, cents). There is not one
+//     Float or Decimal column in this section. `10.1 + 20.2 !== 30.3` in binary
+//     floating point, and in a ledger that discrepancy is a real lost rupee.
+//     Even the FX rate is an integer (`rateE8`) — see {@link FxQuote}.
+//  2. {@link LedgerEntry} is append-only and its unique constraint is what makes
+//     a double credit a DATABASE error instead of a silent duplicate.
+//  3. Every mutation is keyed by an {@link IdempotencyRecord}, and the rail's own
+//     answer — captured in {@link RailEvent} and {@link ReconciliationRecord} —
+//     outranks whatever we believed happened.
+
+// ── chart of accounts ───────────────────────────────────────────────────────
+model LedgerAccount {
+  id String @id @default(uuid()) @db.Uuid
+
+  /** USER | PLATFORM | EXTERNAL. */
+  ownerType String @map("owner_type")
+  /**
+   * userId / beneficiaryId, or `''` for the platform's own accounts.
+   *
+   * Deliberately NOT nullable, and this is the whole reason the unique
+   * constraint below works. Postgres treats NULLs as distinct in a unique
+   * index, so a nullable `ownerId` would happily allow a SECOND platform
+   * SUSPENSE(INR) account — and money reserved into one of them, then settled
+   * out of the other, balances arithmetically while being completely wrong.
+   * The empty string collides; NULL does not.
+   *
+   * There is no foreign key either: the owner is a user, a beneficiary, or
+   * nobody at all, so this is one polymorphic key rather than three nullable
+   * FKs that would each need a CHECK constraint to stay exclusive.
+   */
+  ownerId String @default("") @map("owner_id")
+
+  type     AccountType
+  currency String      @db.VarChar(3)
+  /** Human label for the admin ledger view ("Suspense · INR"). */
+  label    String?
+
+  /**
+   * Platform accounts may legitimately run negative (a nostro is a liability we
+   * owe); a USER_WALLET may not. Enforced in `LedgerService`, declared here so
+   * the rule is visible next to the data it governs.
+   */
+  allowNegative Boolean @default(false) @map("allow_negative")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  entries LedgerEntry[]
+
+  @@unique([ownerType, ownerId, type, currency])
+  @@index([type, currency])
+}
+
+// ── append-only ledger entries ──────────────────────────────────────────────
+model LedgerEntry {
+  id            String @id @default(uuid()) @db.Uuid
+  transactionId String @map("transaction_id") @db.Uuid
+  accountId     String @map("account_id") @db.Uuid
+
+  direction LedgerDirection
+  /** Integer minor units. Always POSITIVE — the sign lives in `direction`. */
+  amountMinor BigInt @map("amount_minor")
+  currency    String @db.VarChar(3)
+
+  /** Which leg of the saga posted this. */
+  leg LedgerLeg
+  /**
+   * Discriminator for legs that may legitimately repeat — a second partial
+   * refund, the 7th debit of a mandate. Carries the id of the Reversal /
+   * MandateExecution that caused it, and `''` for the once-only legs.
+   *
+   * Not nullable, for exactly the reason given on {@link LedgerAccount.ownerId}:
+   * a NULL would defeat the unique constraint that this column exists to arm.
+   */
+  legRef String @default("") @map("leg_ref")
+
+  /** Free-form provenance for the admin ledger view (rail code, admin id). */
+  metadata Json? @db.Json
+
+  postedAt DateTime @default(now()) @map("posted_at") @db.Timestamptz()
+
+  transaction Transaction   @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  account     LedgerAccount @relation(fields: [accountId], references: [id])
+
+  /**
+   * THE most important constraint in the schema.
+   *
+   * Two webhooks settling the same transaction concurrently both pass every
+   * status check application code can express — each reads `PENDING`, each
+   * decides to settle, and the second one credits the beneficiary twice. No
+   * amount of `if (txn.status === 'SUCCESS') return` prevents it, because both
+   * reads happen before either write. Only this constraint does: the second
+   * INSERT fails, its transaction rolls back, and the money moves once.
+   */
+  @@unique([transactionId, accountId, direction, leg, legRef])
+  @@index([accountId, direction])
+  @@index([transactionId])
+  @@index([postedAt])
+}
+
+// ── the transaction (the saga root) ─────────────────────────────────────────
+model Transaction {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  type      TxnType
+  direction TxnDirection @default(OUTBOUND)
+  corridor  Corridor
+  rail      PaymentRail
+  status    TxnStatus    @default(INITIATED)
+
+  sourceCurrency String @map("source_currency") @db.VarChar(3)
+  destCurrency   String @map("dest_currency") @db.VarChar(3)
+
+  /** Minor units converted to the destination — the "you send" amount. */
+  sourceAmount BigInt @map("source_amount")
+  /** Minor units the beneficiary receives — the "they get" amount. */
+  destAmount   BigInt @map("dest_amount")
+  feeMinor     BigInt @default(0) @map("fee_minor")
+  /** GST on the fee. Booked to its own leg so the tax line is auditable. */
+  taxMinor     BigInt @default(0) @map("tax_minor")
+  /**
+   * `sourceAmount + feeMinor + taxMinor` — what actually leaves the wallet.
+   *
+   * Denormalised on purpose. It is the exact figure the RESERVE posting must
+   * carry, so storing it turns "did we reserve the right amount?" into a SQL
+   * query an auditor can run, instead of a re-derivation that could drift from
+   * whatever the service computed at the time.
+   */
+  totalDebitMinor BigInt @map("total_debit_minor")
+  /** Cumulative refunded amount. Guards partial refunds against over-refunding. */
+  refundedMinor   BigInt @default(0) @map("refunded_minor")
+
+  fxQuoteId String? @map("fx_quote_id") @db.Uuid
+  /** The locked rate × 1e8, as an integer. Never a float — see {@link FxQuote}. */
+  fxRateE8  BigInt? @map("fx_rate_e8")
+
+  beneficiaryId String? @map("beneficiary_id") @db.Uuid
+  /**
+   * Snapshot of the counterparty AS IT WAS when the money moved.
+   *
+   * The Beneficiary row can be renamed, re-verified, or blocked later, and a
+   * receipt that renders today's beneficiary record would quietly rewrite
+   * history — the one thing a payment record must never do. A dispute six
+   * months from now is argued from these two columns.
+   */
+  counterpartyHandle String  @map("counterparty_handle")
+  counterpartyName   String? @map("counterparty_name")
+
+  /** RBI purpose code (cross-border) or our internal code (domestic). */
+  purposeCode String  @map("purpose_code")
+  /** Merchant Category Code, for P2M. Null for P2P. */
+  mcc         String? @db.VarChar(4)
+  /** The payer's note. UPI caps this at 50 characters. */
+  narration   String? @db.VarChar(50)
+
+  /** Client-supplied. Unique, so a retried create can never mint a second txn. */
+  idempotencyKey String @unique @map("idempotency_key")
+
+  provider String
+  /** The PSP's own transaction id. */
+  railRef  String? @unique @map("rail_ref")
+  /**
+   * The UTR / RRN — the reference a user quotes to their bank, and the only
+   * identifier both PSPs and the beneficiary's bank recognise. Distinct from
+   * `railRef`, which is one vendor's private handle.
+   */
+  utr      String? @unique
+  /** The raw NPCI response code (`ZA`, `U30`, `XH`…). Kept verbatim. */
+  railCode String? @map("rail_code")
+
+  riskScore Float?   @map("risk_score")
+  riskFlags String[] @default([]) @map("risk_flags")
+
+  /**
+   * Bounded status polling. NPCI limits how often a PSP may ask "what happened?"
+   * (broadly: not before 90s, and only a handful of times), so the budget is
+   * spent from a counter on the row rather than by a cron job that would happily
+   * re-ask every minute and get us throttled off the rail.
+   */
+  statusCheckCount Int       @default(0) @map("status_check_count")
+  nextPollAt       DateTime? @map("next_poll_at") @db.Timestamptz()
+
+  failureReason String? @map("failure_reason")
+
+  /** Which device authorised this, and from where. Fraud review needs both. */
+  deviceId  String? @map("device_id") @db.Uuid
+  ipAddress String? @map("ip_address")
+  /**
+   * The M3 presentation that justified a DISBURSAL. This is the join between
+   * "a lender trusted the passport" and "the lender paid out", and it is what
+   * makes the M3→M4 claim auditable rather than a slide.
+   */
+  passportRef String? @map("passport_ref")
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+  submittedAt DateTime? @map("submitted_at") @db.Timestamptz()
+  completedAt DateTime? @map("completed_at") @db.Timestamptz()
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  beneficiary Beneficiary? @relation(fields: [beneficiaryId], references: [id], onDelete: SetNull)
+  fxQuote     FxQuote?     @relation(fields: [fxQuoteId], references: [id], onDelete: SetNull)
+
+  entries    LedgerEntry[]
+  reversals  Reversal[]
+  recons     ReconciliationRecord[]
+  disputes   PaymentDispute[]
+  railEvents RailEvent[]
+  collect    CollectRequest?
+  execution  MandateExecution?
+  idempotency IdempotencyRecord[]
+
+  @@index([userId, status])
+  @@index([userId, createdAt])
+  @@index([status, nextPollAt])
+  @@index([status, updatedAt])
+  @@index([beneficiaryId])
+}
+
+// ── beneficiary ─────────────────────────────────────────────────────────────
+model Beneficiary {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  displayName String                @map("display_name")
+  /**
+   * The name the beneficiary's bank holds (from penny-drop / VPA resolution).
+   *
+   * NPCI requires this be SHOWN to the payer before they authorise, and the
+   * payer must confirm it. It is the single most effective defence against
+   * social-engineering fraud: the attacker controls the VPA string, but not
+   * what the bank calls the account behind it.
+   */
+  registeredName String?             @map("registered_name")
+  handleType     BeneficiaryHandleType @map("handle_type")
+  /** The VPA, or `account|ifsc` for a bank handle. Normalised, lower-cased. */
+  handle         String
+  /** Encrypted account number, when the handle is ACCOUNT_IFSC. */
+  accountEnc     String?             @map("account_enc")
+  ifsc           String?             @db.VarChar(11)
+
+  country  String @db.VarChar(2)
+  currency String @db.VarChar(3)
+
+  status BeneficiaryStatus @default(UNVERIFIED)
+  /** Why a penny-drop or VPA resolution failed. Shown to the user verbatim. */
+  statusReason String? @map("status_reason")
+
+  /**
+   * The user's OWN account (a withdrawal target or a topup source) rather than
+   * a third party's. Own-account moves skip the new-beneficiary cooling period
+   * and the cross-border corridor entirely, so conflating the two would either
+   * cripple withdrawals or open a mule route.
+   */
+  isSelf Boolean @default(false) @map("is_self")
+
+  /** Sanctions/PEP screening — mandatory before any cross-border credit. */
+  screenedAt   DateTime? @map("screened_at") @db.Timestamptz()
+  screeningHit Boolean   @default(false) @map("screening_hit")
+
+  /**
+   * When the beneficiary became usable. The new-beneficiary cooling period is
+   * measured from HERE, not from `createdAt`: an unverified row a user created
+   * days ago and only verified a minute before a large transfer is exactly the
+   * pattern the cooling period exists to catch.
+   */
+  verifiedAt DateTime? @map("verified_at") @db.Timestamptz()
+  lastUsedAt DateTime? @map("last_used_at") @db.Timestamptz()
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt  DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+  deletedAt  DateTime? @map("deleted_at") @db.Timestamptz()
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+  mandates     Mandate[]
+
+  /** One row per (user, handle). A duplicate would split the cooling period. */
+  @@unique([userId, handle])
+  @@index([userId, status])
+}
+
+// ── the user's own UPI address ──────────────────────────────────────────────
+model UpiHandle {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  /** `name@pravaah`, lower-cased. */
+  vpa    String @unique
+  suffix String @default("pravaah")
+
+  status    UpiHandleStatus @default(PENDING)
+  isPrimary Boolean         @default(false) @map("is_primary")
+
+  /** Encrypted account number the VPA resolves to, plus its IFSC. */
+  linkedAccountEnc String? @map("linked_account_enc")
+  linkedIfsc       String? @map("linked_ifsc") @db.VarChar(11)
+  linkedBankName   String? @map("linked_bank_name")
+
+  verifiedAt    DateTime? @map("verified_at") @db.Timestamptz()
+  deactivatedAt DateTime? @map("deactivated_at") @db.Timestamptz()
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /**
+   * A DEACTIVATED row is kept forever and its `vpa` is never reissued to
+   * another user.
+   *
+   * Recycling would be catastrophic in a way that is easy to miss: a payer with
+   * `ravi@pravaah` saved in their address book — or a printed QR on a shopfront
+   * — would keep sending money to that string, and it would arrive in a
+   * stranger's wallet. The unique index on `vpa` covers deactivated rows too,
+   * which is what makes that impossible.
+   */
+  @@index([userId, status])
+}
+
+// ── FX quote (a rate lock, single-use) ─────────────────────────────────────
+model FxQuote {
+  id     String  @id @default(uuid()) @db.Uuid
+  userId String? @map("user_id") @db.Uuid
+
+  sourceCurrency String @map("source_currency") @db.VarChar(3)
+  destCurrency   String @map("dest_currency") @db.VarChar(3)
+
+  /**
+   * Rates as integers scaled by 1e8, NOT `Decimal`.
+   *
+   * A `Decimal(18,8)` column is only as good as the arithmetic performed on it,
+   * and every code path that reaches for one ends up at `Number(rate)` — the
+   * exact float conversion this module forbids. An integer cannot be
+   * accidentally floated: `dest = src * rateE8 / 1e8` is exact integer
+   * arithmetic from end to end, and the rounding step is explicit and tested
+   * (see `money.util.ts`) rather than whatever the FPU decided.
+   */
+  midRateE8  BigInt @map("mid_rate_e8")
+  /** The customer's rate: mid, less our spread. What the app displays. */
+  rateE8     BigInt @map("rate_e8")
+  spreadBps  Int    @default(0) @map("spread_bps")
+
+  /**
+   * The FULL breakdown, frozen.
+   *
+   * The server does not recompute these at submit time — it reads them back.
+   * A quote the user accepted and a total the server derived independently can
+   * disagree (a config reload, a fee-table change, a rounding tweak), and the
+   * user would be charged a number they never agreed to.
+   */
+  sourceAmount    BigInt @map("source_amount")
+  destAmount      BigInt @map("dest_amount")
+  feeMinor        BigInt @default(0) @map("fee_minor")
+  taxMinor        BigInt @default(0) @map("tax_minor")
+  totalDebitMinor BigInt @map("total_debit_minor")
+
+  rateSource String @default("static") @map("rate_source")
+
+  validUntil DateTime  @map("valid_until") @db.Timestamptz()
+  /** Single-use: one favourable quote may not fund an unlimited number of transfers. */
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz()
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  user         User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+
+  @@index([userId, createdAt])
+  @@index([validUntil])
+}
+
+// ── limit counters ──────────────────────────────────────────────────────────
+model LimitCounter {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  corridor Corridor
+  currency String      @db.VarChar(3)
+  window   LimitWindow
+  scope    LimitScope  @default(VALUE)
+
+  /**
+   * The calendar bucket this row counts — `2026-07-27` for a DAY, `2026-2027`
+   * for the LRS financial year.
+   *
+   * Part of the unique key, and that is the point: a new day is a NEW ROW, so
+   * there is no "reset the counter if resetAt has passed" step for two
+   * concurrent requests to race on. The obvious design — one row per user with
+   * an in-place reset — lets both requests observe a stale `resetAt`, both
+   * zero the counter, and both then spend a full day's limit within the same
+   * second.
+   */
+  bucketKey String @map("bucket_key")
+
+  usedMinor BigInt @default(0) @map("used_minor")
+  /** For COUNT-scoped rows. UPI caps the NUMBER of transactions, not just value. */
+  usedCount Int    @default(0) @map("used_count")
+
+  resetAt   DateTime @map("reset_at") @db.Timestamptz()
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, corridor, currency, window, scope, bucketKey])
+  @@index([userId])
+}
+
+// ── idempotency ─────────────────────────────────────────────────────────────
+model IdempotencyRecord {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  /** The endpoint. Scoped so one key may be reused across unrelated operations. */
+  scope String
+  key   String
+
+  /**
+   * sha256 of the canonicalised request body.
+   *
+   * The same key with a DIFFERENT body is not a retry — it is a client bug or an
+   * attack, and replaying the first response would silently discard the second
+   * request. It is a 409, loudly.
+   */
+  requestHash String @map("request_hash")
+
+  status IdempotencyStatus @default(IN_PROGRESS)
+  /** The stored response, replayed verbatim to a retry. */
+  responseJson Json?  @map("response_json") @db.Json
+  statusCode   Int?   @map("status_code")
+  errorMessage String? @map("error_message")
+
+  transactionId String? @map("transaction_id") @db.Uuid
+
+  /**
+   * When the in-flight lock was taken. A process that crashes mid-request would
+   * otherwise leave the key IN_PROGRESS forever, permanently bricking that
+   * operation for the user; a stale lock is reclaimable.
+   */
+  lockedAt  DateTime  @default(now()) @map("locked_at") @db.Timestamptz()
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz()
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transaction Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, scope, key])
+  @@index([expiresAt])
+}
+
+// ── collect request (money IN — the payer approves in their own PSP app) ────
+model CollectRequest {
+  id     String @id @default(uuid()) @db.Uuid
+  /** Our user — the PAYEE. A collect pulls money towards them. */
+  userId String @map("user_id") @db.Uuid
+
+  /** The payer's VPA. UPI collect is address-based; there is no account here. */
+  payerHandle String  @map("payer_handle")
+  payerName   String? @map("payer_name")
+
+  amountMinor BigInt @map("amount_minor")
+  currency    String @db.VarChar(3)
+  purposeCode String @map("purpose_code")
+  narration   String? @db.VarChar(50)
+
+  status CollectStatus @default(CREATED)
+  /**
+   * A collect that never gets answered must EXPIRE rather than linger.
+   *
+   * A live request is an open authorisation sitting in a stranger's app: it can
+   * be approved days later, against a balance and an intent that have both moved
+   * on. UPI collects are short-lived for that reason.
+   */
+  expiresAt DateTime @map("expires_at") @db.Timestamptz()
+
+  railRef       String? @unique @map("rail_ref")
+  railCode      String? @map("rail_code")
+  declineReason String? @map("decline_reason")
+
+  /** Set once the payer approves and a real transaction exists. */
+  transactionId String? @unique @map("transaction_id") @db.Uuid
+  qrId          String? @map("qr_id") @db.Uuid
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+  respondedAt DateTime? @map("responded_at") @db.Timestamptz()
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transaction Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  qr          PaymentQr?   @relation(fields: [qrId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status])
+  @@index([status, expiresAt])
+}
+
+// ── UPI AutoPay mandate ─────────────────────────────────────────────────────
+model Mandate {
+  id     String @id @default(uuid()) @db.Uuid
+  /** The PAYER — our user, whose account will be debited on schedule. */
+  userId String @map("user_id") @db.Uuid
+  /** The payee. A mandate always names a fixed counterparty. */
+  beneficiaryId String @map("beneficiary_id") @db.Uuid
+
+  /** Our reference. */
+  mandateRef String @unique @map("mandate_ref")
+  /** The UPI Mandate Number the rail assigns. Absent until the payer approves. */
+  umn        String? @unique
+
+  status     MandateStatus     @default(CREATED)
+  frequency  MandateFrequency
+  amountRule MandateAmountRule @default(EXACT)
+  /**
+   * The ceiling a single debit may reach.
+   *
+   * With `amountRule = MAX` the merchant presents a varying amount and this is
+   * the cap the payer authorised; with `EXACT` the debit must equal it. Checked
+   * on every execution, because a mandate is a standing permission and the only
+   * thing bounding it is this number.
+   */
+  maxAmountMinor BigInt @map("max_amount_minor")
+  currency       String @db.VarChar(3)
+  purposeCode    String @map("purpose_code")
+  narration      String? @db.VarChar(50)
+
+  validFrom  DateTime  @map("valid_from") @db.Timestamptz()
+  validUntil DateTime  @map("valid_until") @db.Timestamptz()
+  nextDebitAt DateTime? @map("next_debit_at") @db.Timestamptz()
+  lastDebitAt DateTime? @map("last_debit_at") @db.Timestamptz()
+
+  railRef       String? @unique @map("rail_ref")
+  revokeReason  String? @map("revoke_reason")
+  failureReason String? @map("failure_reason")
+
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt  DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+  approvedAt DateTime? @map("approved_at") @db.Timestamptz()
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz()
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  beneficiary Beneficiary @relation(fields: [beneficiaryId], references: [id])
+  executions  MandateExecution[]
+
+  @@index([userId, status])
+  @@index([status, nextDebitAt])
+}
+
+model MandateExecution {
+  id         String @id @default(uuid()) @db.Uuid
+  mandateId  String @map("mandate_id") @db.Uuid
+  /** 1-based. Part of the unique key, so a double debit is a DB error. */
+  sequence   Int
+
+  status      MandateExecutionStatus @default(SCHEDULED)
+  amountMinor BigInt                 @map("amount_minor")
+
+  dueAt DateTime @map("due_at") @db.Timestamptz()
+  /**
+   * When the pre-debit notification went out.
+   *
+   * NPCI requires it at least 24 hours before the debit, and the requirement is
+   * not decorative: a recurring debit nobody was warned about is
+   * indistinguishable from an unauthorised one, and it is what makes AutoPay
+   * disputes unwinnable for the PSP. `PaymentSchedulerService` will not execute
+   * a row whose `notifiedAt` is null.
+   */
+  notifiedAt DateTime? @map("notified_at") @db.Timestamptz()
+  debitedAt  DateTime? @map("debited_at") @db.Timestamptz()
+
+  transactionId String? @unique @map("transaction_id") @db.Uuid
+  failureReason String? @map("failure_reason")
+  attempts      Int     @default(0)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  mandate     Mandate      @relation(fields: [mandateId], references: [id], onDelete: Cascade)
+  transaction Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+
+  @@unique([mandateId, sequence])
+  @@index([status, dueAt])
+}
+
+// ── UPI QR ──────────────────────────────────────────────────────────────────
+model PaymentQr {
+  id     String @id @default(uuid()) @db.Uuid
+  /** The payee — whoever the money goes to when this is scanned. */
+  userId String @map("user_id") @db.Uuid
+
+  kind QrKind
+  /** Opaque public reference. Printed/encoded, never guessable. */
+  ref  String @unique
+
+  /** The `upi://pay?...` intent string, exactly as encoded into the image. */
+  payload String
+  vpa     String
+
+  /** Null for STATIC — the payer types the amount. */
+  amountMinor BigInt? @map("amount_minor")
+  currency    String  @db.VarChar(3)
+  mcc         String? @db.VarChar(4)
+  purposeCode String  @map("purpose_code")
+  narration   String? @db.VarChar(50)
+
+  /**
+   * HMAC over the amount-bearing fields, for DYNAMIC QRs only.
+   *
+   * A dynamic QR IS a payment instruction, so an unsigned one can be edited in
+   * transit — change `am=1.00` to `am=100.00` on a shared image and the payer's
+   * app will faithfully present the attacker's number. A static QR carries no
+   * amount and so needs no signature.
+   */
+  signature String?
+
+  expiresAt      DateTime? @map("expires_at") @db.Timestamptz()
+  /** Set on first successful payment. A dynamic QR is spent exactly once. */
+  consumedAt     DateTime? @map("consumed_at") @db.Timestamptz()
+  consumedByTxn  String?   @map("consumed_by_txn") @db.Uuid
+  isActive       Boolean   @default(true) @map("is_active")
+  scanCount      Int       @default(0) @map("scan_count")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  collects CollectRequest[]
+
+  @@index([userId, isActive])
+  @@index([kind, expiresAt])
+}
+
+// ── UDIR dispute ────────────────────────────────────────────────────────────
+model PaymentDispute {
+  id            String @id @default(uuid()) @db.Uuid
+  userId        String @map("user_id") @db.Uuid
+  transactionId String @map("transaction_id") @db.Uuid
+
+  kind   DisputeKind
+  status DisputeStatus @default(OPEN)
+
+  description        String
+  claimedAmountMinor BigInt? @map("claimed_amount_minor")
+  evidence           Json?   @db.Json
+
+  railRef    String? @map("rail_ref")
+  /** What we concluded, in words the customer receives. */
+  resolution String?
+  resolvedByAdminId String? @map("resolved_by_admin_id") @db.Uuid
+
+  /** UDIR obliges the PSP to answer inside a fixed window, not "eventually". */
+  slaDueAt   DateTime  @map("sla_due_at") @db.Timestamptz()
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt  DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+  resolvedAt DateTime? @map("resolved_at") @db.Timestamptz()
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  /** One open dispute per (txn, kind) — a second is the same complaint retyped. */
+  @@unique([transactionId, kind])
+  @@index([status, slaDueAt])
+  @@index([userId, status])
+}
+
+// ── reversal / refund ───────────────────────────────────────────────────────
+model Reversal {
+  id            String @id @default(uuid()) @db.Uuid
+  transactionId String @map("transaction_id") @db.Uuid
+  /**
+   * 1-based, and part of the unique key.
+   *
+   * NOT `transactionId @unique`: partial refunds mean one transaction can carry
+   * several reversals, and a unique transaction id would make the second
+   * legitimate partial refund impossible while doing nothing to stop a
+   * duplicate of the first.
+   */
+  sequence      Int
+
+  kind        ReversalKind
+  reason      String
+  amountMinor BigInt         @map("amount_minor")
+  status      ReversalStatus @default(PENDING)
+
+  railRef       String? @map("rail_ref")
+  failureReason String? @map("failure_reason")
+  /** Set when an admin, rather than the rail, forced this. */
+  initiatedByAdminId String? @map("initiated_by_admin_id") @db.Uuid
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  completedAt DateTime? @map("completed_at") @db.Timestamptz()
+
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  @@unique([transactionId, sequence])
+  @@index([status])
+}
+
+// ── reconciliation ──────────────────────────────────────────────────────────
+model ReconciliationRecord {
+  id            String @id @default(uuid()) @db.Uuid
+  transactionId String @map("transaction_id") @db.Uuid
+
+  source ReconSource
+  /** What the rail said, verbatim. */
+  railStatus      String  @map("rail_status")
+  railCode        String? @map("rail_code")
+  railAmountMinor BigInt? @map("rail_amount_minor")
+  /** What we believed at the moment of the check. */
+  internalStatus  String  @map("internal_status")
+
+  status      ReconStatus
+  discrepancy String?
+  /** The correction we applied ("settled_late_success", "refunded"). */
+  action      String?
+
+  resolvedAt        DateTime? @map("resolved_at") @db.Timestamptz()
+  resolvedByAdminId String?   @map("resolved_by_admin_id") @db.Uuid
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  /**
+   * Append-only, one row per check — NOT one row per transaction that gets
+   * overwritten. "The rail said PENDING at 10:00, PENDING at 10:02, and SUCCESS
+   * at 10:05 after we had already given up" is the entire story of a
+   * late-settlement incident, and an upsert would leave only its last frame.
+   */
+  @@index([transactionId, createdAt])
+  @@index([status, createdAt])
+}
+
+// ── rail events (webhooks) ──────────────────────────────────────────────────
+model RailEvent {
+  id       String @id @default(uuid()) @db.Uuid
+  provider String
+  /** The provider's event id. Unique per provider — this is the replay defence. */
+  eventId  String @map("event_id")
+
+  railRef String? @map("rail_ref")
+  utr     String?
+  /** `payment.status` | `refund` | `mandate` | `collect`. */
+  kind    String
+
+  status RailEventStatus @default(RECEIVED)
+  /** The raw body, field-encrypted. A dispute is argued from these bytes. */
+  payloadEnc        String  @map("payload_enc")
+  signatureVerified Boolean @default(false) @map("signature_verified")
+
+  transactionId String? @map("transaction_id") @db.Uuid
+
+  /**
+   * A webhook can arrive BEFORE the HTTP response that told us the rail ref —
+   * the rail is faster than our own commit more often than anyone expects. Such
+   * an event is stored UNMATCHED and replayed by the scheduler once the
+   * reference exists, rather than dropped as "unknown transaction".
+   */
+  attempts    Int       @default(0)
+  lastError   String?   @map("last_error")
+  receivedAt  DateTime  @default(now()) @map("received_at") @db.Timestamptz()
+  processedAt DateTime? @map("processed_at") @db.Timestamptz()
+
+  transaction Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+
+  @@unique([provider, eventId])
+  @@index([status, receivedAt])
+  @@index([railRef])
+}
+
+// ============================================================================
+// M5 — MICRO-INSURANCE (usage-based cover · reputation-priced · claims)
+// ============================================================================
+// M4 proved the platform can move money. M5 proves the reputation is worth more
+// than one product: the SAME consented behaviour (M1) and the SAME explainable
+// score (M2) price micro-insurance for a population insurers price blindly or
+// refuse, then collect premium and pay claims over the SAME double-entry ledger
+// (M4). One reputation, many products — that is the whole claim, and this section
+// is where it either holds or does not.
+//
+// Four invariants are carried by the schema rather than trusted to the services:
+//
+//  1. MONEY IS INTEGER MINOR UNITS. Not one Float or Decimal column, exactly as
+//     in M4 — premiums and payouts post through `LedgerService`, so a rounding
+//     convention that differed here would break the trial balance.
+//  2. A POLICY CANNOT EXIST WITHOUT THE QUOTE THAT PRICED IT. `quoteId` is
+//     UNIQUE and required, which makes "what number did we promise, and on what
+//     evidence?" answerable years later — and makes selling the same quote twice
+//     a database error rather than a race.
+//  3. A CLAIM CANNOT BE FILED TWICE. `(policyId, dedupeHash)` is UNIQUE, so the
+//     duplicate-claim guard survives two concurrent submissions that both read
+//     "no matching claim".
+//  4. A PAYOUT CANNOT HAPPEN TWICE. `payoutTxnId` is UNIQUE, on top of M4's own
+//     idempotency key. Both are needed: the key stops a second transaction being
+//     minted, and this stops a second transaction being ATTACHED.
+
+// ── product catalog (admin-managed; a new cover needs no deploy) ─────────────
+model InsuranceProduct {
+  id   String               @id @default(uuid()) @db.Uuid
+  type InsuranceProductType
+  name String
+  /**
+   * Who this is for, in one plain sentence.
+   *
+   * Stored rather than hard-coded in the app because the marketplace card is the
+   * only place a migrant worker decides whether a product is even about them,
+   * and that copy has to be changeable without shipping a build.
+   */
+  tagline  String?
+  currency String @db.VarChar(3)
+
+  /**
+   * The annual base rate, in BASIS POINTS OF COVERAGE.
+   *
+   * Basis points, not a float rate, for the same reason every amount here is an
+   * integer: the premium is computed as `coverage × baseRateBps × multiplierBps
+   * / 1e8` entirely in BigInt, so there is no step at which a rate becomes a
+   * float and starts losing paise.
+   */
+  baseRateBps Int @map("base_rate_bps")
+
+  minCoverMinor BigInt @map("min_cover_minor")
+  maxCoverMinor BigInt @map("max_cover_minor")
+
+  termDays Int @map("term_days")
+  /**
+   * The waiting period — the single most important anti-adverse-selection
+   * control in the module.
+   *
+   * Claims for incidents inside it do not pay. Without it, the rational move is
+   * to buy cover the day after the accident, and the book is insolvent by
+   * construction. Extended further for SUBSTANDARD risks at quote time.
+   */
+  waitingPeriodDays Int @map("waiting_period_days")
+  /** Cancel-for-full-refund window, as IRDAI requires of a real insurer. */
+  freeLookDays      Int @default(7) @map("free_look_days")
+
+  /**
+   * Plain-language exclusions, surfaced on every quote and policy screen.
+   *
+   * A JSON array of short sentences, deliberately not a legal document: the user
+   * this product exists for will not read six pages of policy wording, and an
+   * exclusion they did not understand is a claim rejection they will experience
+   * as a betrayal.
+   */
+  exclusions Json @db.Json
+  /** The hard non-advice disclaimer. Non-negotiable on every priced surface. */
+  disclaimer String
+
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  quotes   InsuranceQuote[]
+  policies Policy[]
+
+  @@index([type, isActive])
+}
+
+// ── the quote: a priced offer, short-lived, never a contract ─────────────────
+model InsuranceQuote {
+  id        String               @id @default(uuid()) @db.Uuid
+  userId    String               @map("user_id") @db.Uuid
+  productId String               @map("product_id") @db.Uuid
+  /**
+   * Snapshot of the product's type at quote time.
+   *
+   * Denormalised on purpose, like M4's `counterpartyName`: an admin may retire a
+   * product or correct its catalogue row, and a quote that rendered today's
+   * product record would quietly rewrite what was offered.
+   */
+  type      InsuranceProductType
+
+  coverageMinor BigInt @map("coverage_minor")
+  currency      String @db.VarChar(3)
+  /** The premium for ONE period of `frequency`. */
+  premiumMinor  BigInt @map("premium_minor")
+
+  frequency PremiumFrequency
+  riskTier  RiskTier         @map("risk_tier")
+  /** Applied to `product.baseRateBps`. 10000 = 1.0×. */
+  riskMultiplierBps Int      @map("risk_multiplier_bps")
+
+  /**
+   * M2 provenance — the exact score this price was derived from.
+   *
+   * Nullable because a thin-file applicant is priced conservatively rather than
+   * refused, and there is genuinely no score to point at. That case is visible
+   * (`scoreId` null, tier SUBSTANDARD) instead of being disguised as a score of
+   * zero.
+   */
+  scoreId    String? @map("score_id") @db.Uuid
+  scoreBand  String? @map("score_band")
+  confidence Float?
+  /**
+   * The pricing inputs, field-encrypted (AES-256-GCM).
+   *
+   * Kept so a disputed premium can be reproduced exactly, and encrypted because
+   * the inputs are derived from someone's financial behaviour. Nothing here is
+   * ever read to make a decision — only to explain one that was already made.
+   */
+  riskInputsEnc       String? @map("risk_inputs_enc")
+  pricingModelVersion String  @map("pricing_model_version")
+
+  waitingPeriodDays Int    @map("waiting_period_days")
+  /**
+   * What a STANDARD-risk applicant would pay for the same cover.
+   *
+   * Stored, not computed at render time, because it is the product's whole
+   * pitch — "your premium is lower because of your reputation" — and a
+   * comparison recomputed from a since-edited catalogue row would eventually
+   * make that claim untrue.
+   */
+  standardPremiumMinor BigInt @map("standard_premium_minor")
+
+  status        InsuranceQuoteStatus @default(DRAFT)
+  declineReason String?              @map("decline_reason")
+
+  validUntil DateTime  @map("valid_until") @db.Timestamptz()
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  convertedAt DateTime? @map("converted_at") @db.Timestamptz()
+
+  user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product InsuranceProduct @relation(fields: [productId], references: [id])
+  policy  Policy?
+
+  @@index([userId, status])
+  @@index([status, validUntil])
+}
+
+// ── the policy: the bound contract ──────────────────────────────────────────
+model Policy {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  /**
+   * UNIQUE, and this constraint IS the double-sell guard.
+   *
+   * Two concurrent buy requests against one quote both read "no policy yet";
+   * only the unique index can arbitrate, and it does — the loser reads the
+   * winner's policy back instead of binding a second contract on one price.
+   */
+  quoteId   String @unique @map("quote_id") @db.Uuid
+  productId String @map("product_id") @db.Uuid
+
+  /** Human-quotable, e.g. `PRV-INC-2K7F4A`. What a claim call starts with. */
+  policyNumber     String  @unique @map("policy_number")
+  /** The insurer's own reference from `bindPolicy`. Null if binding is pending. */
+  insurerPolicyRef String? @map("insurer_policy_ref")
+
+  coverageMinor BigInt           @map("coverage_minor")
+  premiumMinor  BigInt           @map("premium_minor")
+  frequency     PremiumFrequency
+  currency      String           @db.VarChar(3)
+
+  status PolicyStatus @default(PENDING_PAYMENT)
+
+  startAt DateTime? @map("start_at") @db.Timestamptz()
+  endAt   DateTime? @map("end_at") @db.Timestamptz()
+  /** Incidents before this are not covered. The core adverse-selection control. */
+  waitingPeriodEndsAt DateTime? @map("waiting_period_ends_at") @db.Timestamptz()
+  freeLookEndsAt      DateTime? @map("free_look_ends_at") @db.Timestamptz()
+  nextPremiumDueAt    DateTime? @map("next_premium_due_at") @db.Timestamptz()
+  graceEndsAt         DateTime? @map("grace_ends_at") @db.Timestamptz()
+
+  /**
+   * Cumulative approved-and-paid claim value.
+   *
+   * Denormalised so the aggregate-limit check ("this policy's cover is already
+   * exhausted") is a column comparison rather than a SUM over claims that a
+   * concurrent second claim could read stale.
+   */
+  claimedMinor BigInt @default(0) @map("claimed_minor")
+
+  /**
+   * ABDM / ABHA health-identity linkage. Designed in, not a build dependency —
+   * see `ClaimsExchangeProvider` for the same treatment of HCX.
+   */
+  abhaRef String? @map("abha_ref")
+
+  cancelledAt   DateTime? @map("cancelled_at") @db.Timestamptz()
+  cancelReason  String?   @map("cancel_reason")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  quote   InsuranceQuote   @relation(fields: [quoteId], references: [id])
+  product InsuranceProduct @relation(fields: [productId], references: [id])
+
+  claims   Claim[]
+  premiums PremiumPayment[]
+
+  @@index([userId, status])
+  @@index([status, nextPremiumDueAt])
+  @@index([status, graceEndsAt])
+  @@index([status, endAt])
+}
+
+// ── premium collection log (one row per attempt; money on the M4 ledger) ─────
+model PremiumPayment {
+  id       String @id @default(uuid()) @db.Uuid
+  policyId String @map("policy_id") @db.Uuid
+
+  amountMinor BigInt @map("amount_minor")
+  currency    String @db.VarChar(3)
+
+  /** The cover period this premium buys. A lapse is measured against `periodEnd`. */
+  periodStart DateTime @map("period_start") @db.Timestamptz()
+  periodEnd   DateTime @map("period_end") @db.Timestamptz()
+
+  /**
+   * The M4 `PREMIUM` transaction. UNIQUE, so one ledger movement can never be
+   * claimed by two premium periods.
+   */
+  transactionId String? @unique @map("transaction_id") @db.Uuid
+  /** PENDING | PAID | FAILED | REFUNDED. */
+  status        String  @default("PENDING")
+  failureReason String? @map("failure_reason")
+  attempt       Int     @default(1)
+
+  /**
+   * The wallet debit that funded this, keyed for idempotency.
+   *
+   * Derived deterministically from `(policyId, periodStart)` so the dunning cron
+   * retrying a period can never mint a second debit for it — the cron has no
+   * client to supply a key, so the key has to come from the period itself.
+   */
+  idempotencyKey String @unique @map("idempotency_key")
+
+  refundedMinor BigInt    @default(0) @map("refunded_minor")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  paidAt        DateTime? @map("paid_at") @db.Timestamptz()
+
+  policy Policy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+
+  // One row per policy period, so a retry UPSERTS rather than appending a second
+  // obligation for the same month.
+  @@unique([policyId, periodStart])
+  @@index([policyId, status])
+  @@index([status])
+}
+
+// ── the claim ───────────────────────────────────────────────────────────────
+model Claim {
+  id       String @id @default(uuid()) @db.Uuid
+  policyId String @map("policy_id") @db.Uuid
+  userId   String @map("user_id") @db.Uuid
+
+  claimNumber String               @unique @map("claim_number")
+  type        InsuranceProductType
+
+  amountClaimedMinor  BigInt  @map("amount_claimed_minor")
+  amountApprovedMinor BigInt? @map("amount_approved_minor")
+  currency            String  @db.VarChar(3)
+
+  status       ClaimStatus @default(SUBMITTED)
+  incidentDate DateTime    @map("incident_date") @db.Timestamptz()
+  description  String
+
+  /** The M6 fraud hook's verdict, 0..1. Gates the auto-approve path. */
+  riskScore Float?   @map("risk_score")
+  riskFlags String[] @default([]) @map("risk_flags")
+
+  /**
+   * `sha256(policyId : incidentDay : amountClaimed)`.
+   *
+   * The fingerprint, not a flag: two concurrent submissions of the same incident
+   * both pass any application-level "does one already exist?" check, because
+   * both read before either writes. The unique index below is what actually
+   * stops the second one.
+   */
+  dedupeHash String @map("dedupe_hash")
+
+  decision       ClaimDecision?
+  decisionReason String?        @map("decision_reason")
+  /** SYSTEM for an auto-approval, ADMIN for a human. Never inferred at read time. */
+  decidedByType  ActorType?     @map("decided_by_type")
+  reviewerId     String?        @map("reviewer_id") @db.Uuid
+
+  /** The M4 `CLAIM_PAYOUT` transaction. UNIQUE — see the section header. */
+  payoutTxnId     String? @unique @map("payout_txn_id") @db.Uuid
+  insurerClaimRef String? @map("insurer_claim_ref")
+  /** HCX request id, once a real claims exchange is wired. */
+  hcxRequestId    String? @map("hcx_request_id")
+
+  submittedAt DateTime  @default(now()) @map("submitted_at") @db.Timestamptz()
+  decidedAt   DateTime? @map("decided_at") @db.Timestamptz()
+  paidAt      DateTime? @map("paid_at") @db.Timestamptz()
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  policy   Policy     @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  user     User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewer AdminUser? @relation(fields: [reviewerId], references: [id], onDelete: SetNull)
+
+  docs ClaimDocument[]
+
+  @@unique([policyId, dedupeHash])
+  @@index([status, submittedAt])
+  @@index([userId, status])
+  @@index([policyId])
+}
+
+// ── claim documents: OCR extraction + tamper analysis ───────────────────────
+model ClaimDocument {
+  id      String @id @default(uuid()) @db.Uuid
+  claimId String @map("claim_id") @db.Uuid
+
+  /** MEDICAL_BILL | DISCHARGE_SUMMARY | POLICE_FIR | BOARDING_PASS | PAYSLIP | OTHER. */
+  docType     String @map("doc_type")
+  storagePath String @map("storage_path")
+
+  /**
+   * The extracted fields, field-encrypted.
+   *
+   * A hospital bill names a diagnosis and a treating physician. That is health
+   * data about an identified person, so it is encrypted at rest exactly like a
+   * raw KYC payload and masked in the admin projection.
+   */
+  ocrJsonEnc           String? @map("ocr_json_enc")
+  extractedAmountMinor BigInt? @map("extracted_amount_minor")
+  /** 0..1 forgery likelihood. At or above the block threshold → SUSPECT. */
+  tamperScore          Float?  @map("tamper_score")
+  /** 0..1 extraction confidence. Below the floor the doc is not auto-verified. */
+  ocrConfidence        Float?  @map("ocr_confidence")
+
+  verificationStatus ClaimDocStatus @default(UPLOADED) @map("verification_status")
+  /**
+   * sha256 of the uploaded bytes.
+   *
+   * Unique per claim, so the same bill cannot be uploaded three times to pad a
+   * document count into the auto-approve path.
+   */
+  contentHash String   @map("content_hash")
+  uploadedAt  DateTime @default(now()) @map("uploaded_at") @db.Timestamptz()
+
+  claim Claim @relation(fields: [claimId], references: [id], onDelete: Cascade)
+
+  @@unique([claimId, contentHash])
+  @@index([claimId])
+}
+
+// M5 reuses M0's `WebhookEvent` for insurer callback replay-dedupe rather than
+// adding a second table: a replayed event is a replayed event, and one unique
+// index on `(provider, eventId)` is easier to trust than two.
+
+// ============================================================================
+// M6 — FRAUD & RISK
+//
+// The cross-cutting shield. M6 has almost no surface of its own: the other
+// modules call `RiskService` at their decision points and it answers ALLOW /
+// STEP_UP / REVIEW / HOLD / BLOCK with the signals that drove the answer.
+//
+// Two rules shape every model below:
+//
+//  1. **Explainable.** A decision is stored with its child `RiskSignal` rows, so
+//     the number is always reconstructible. A `HOLD` nobody can explain is a
+//     support ticket; one that says "unusual amount from a device bound eight
+//     minutes ago" is trust, and it is also the DPDP automated-decision answer.
+//  2. **Salted hashes for anything cross-user.** `EntityLink` and `ListEntry`
+//     reason about relationships BETWEEN accounts, so they store an HMAC of the
+//     shared artefact rather than the artefact. The graph can find a mule ring
+//     without our holding a plaintext table of who paid whom.
+// ============================================================================
+
+/**
+ * One risk decision, kept forever. The central M6 artefact.
+ *
+ * M4 reads it to justify a `RISK_HELD` transaction, M5 to block a claim
+ * auto-approval, the analyst console to show an operator what fired, and the
+ * user's own "security activity" screen to tell them why they were challenged.
+ */
+model RiskAssessment {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  subjectType RiskSubjectType @map("subject_type")
+  /**
+   * The thing assessed — a transaction, claim, or device id.
+   *
+   * TEXT, not `@db.Uuid`. A LOGIN assessment happens before any row exists to
+   * point at, so its subject is a synthetic key (`login:<identifierHash>`), and
+   * a uuid column would reject it — the same mistake `KycCheck.providerRefId`
+   * once made, which 500'd every insert with `22P02`.
+   */
+  subjectId   String          @map("subject_id")
+
+  /** 0..1. An ordered severity from the noisy-OR aggregation, not a probability. */
+  score    Float
+  decision RiskDecision
+
+  /**
+   * Which weight set produced this score.
+   *
+   * Stored per assessment because the weights ARE the policy. Without it, a score
+   * from before a re-tune cannot be compared with one from after, and an appeal
+   * six months later cannot be argued against the rules that actually applied.
+   */
+  modelVersion String @default("risk-1.0.0") @map("model_version")
+
+  /** The acting device — `Device.id`, nullable because a login may precede a bind. */
+  deviceRef String? @map("device_ref") @db.Uuid
+  ipHash    String? @map("ip_hash")
+  /** Coarse geo, e.g. "IN-MH" or "SG". Never a coordinate — a city is enough to score. */
+  geoHint   String? @map("geo_hint")
+
+  computedAt DateTime @default(now()) @map("computed_at") @db.Timestamptz()
+
+  user    User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  signals RiskSignal[]
+  case    FraudCase?
+
+  @@index([userId, computedAt])
+  @@index([subjectType, subjectId])
+  @@index([decision, computedAt])
+}
+
+/**
+ * One signal that fired, with the weight it carried.
+ *
+ * Child rows rather than a JSON blob on the parent, because these are QUERIED:
+ * "how often did GEO_IMPOSSIBLE fire this week", "show every case where the
+ * mule graph was the deciding signal". A JSON column makes both of those a table
+ * scan and neither indexable.
+ */
+model RiskSignal {
+  id           String @id @default(uuid()) @db.Uuid
+  assessmentId String @map("assessment_id") @db.Uuid
+
+  /** e.g. "SIM_SUSPECTED_SWAP". Text, so a new detector needs no migration. */
+  type   String
+  weight Float
+  /** 0..1 degree, letting a collector express a MILD anomaly versus a blatant one. */
+  value  Float
+  /** Human-readable, and shown to the user. Written for the person it is about. */
+  reason String
+
+  /**
+   * Forces `BLOCK`, bypassing the arithmetic entirely.
+   *
+   * "The payee is on a sanctions list" is not a probability to be averaged with
+   * favourable signals — a system that could average it away would eventually
+   * settle one.
+   */
+  isHard Boolean @default(false) @map("is_hard")
+
+  assessment RiskAssessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+
+  @@index([assessmentId])
+  @@index([type])
+}
+
+/**
+ * The device event stream — the behavioural source and the swap-detection log.
+ *
+ * Append-only. Separate from `Device` (which holds current state) because the
+ * questions differ: `Device` answers "may this device act now", this answers
+ * "what has this device done", and the second is what an analyst reads and what
+ * geo-velocity is computed from.
+ */
+model DeviceEvent {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  /**
+   * `Device.id`, nullable and NOT a foreign key with a cascade.
+   *
+   * An event may describe a device we refused to create a row for — a bind
+   * attempt from an emulator, a SIM-change webhook for a handset we have never
+   * seen. Losing that record is losing exactly the evidence a case needs.
+   */
+  deviceRef String? @map("device_ref") @db.Uuid
+
+  type          DeviceEventType
+  simSerialHash String?         @map("sim_serial_hash")
+  integrity     String?
+  ipHash        String?         @map("ip_hash")
+  geoHint       String?         @map("geo_hint")
+  metadata      Json?           @db.Json
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device Device? @relation(fields: [deviceRef], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([deviceRef, createdAt])
+  @@index([userId, type, createdAt])
+}
+
+/**
+ * A dynamic second factor — the RBI mandate (effective 1 April 2026) in code.
+ *
+ * Three fields kill the three attacks on a challenge: `nonce` makes it
+ * single-use (replay), `maxAttempts` bounds guessing (brute force), and
+ * `expiresAt` makes a captured challenge worthless minutes later.
+ */
+model StepUpChallenge {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  /** The assessment that demanded this. Null for a bind, which precedes scoring. */
+  assessmentId String? @map("assessment_id") @db.Uuid
+
+  method  StepUpMethod
+  purpose StepUpPurpose
+
+  /**
+   * What this challenge authorises, e.g. a transaction id.
+   *
+   * Checked on verify alongside `purpose`, so a challenge issued for one transfer
+   * cannot be redeemed against a different, larger one — which is what a bare
+   * "is there a passed challenge for this user" check would permit.
+   */
+  subjectId String? @map("subject_id")
+
+  nonce String @unique
+  /**
+   * sha256 of the expected answer. Never the answer.
+   *
+   * An OTP table an attacker can read is an OTP table an attacker can use, and a
+   * database backup is a much softer target than an SMS channel.
+   */
+  challengeHash String @map("challenge_hash")
+
+  status      StepUpStatus @default(PENDING)
+  attempts    Int          @default(0)
+  maxAttempts Int          @default(3) @map("max_attempts")
+
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz()
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  resolvedAt DateTime? @map("resolved_at") @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([status, expiresAt])
+}
+
+/**
+ * Rolling velocity counters — the cheapest, highest-yield fraud control there is,
+ * because nearly every attack that monetises a foothold does so fast.
+ *
+ * Keyed on `bucketKey`, so **a new window is a NEW ROW**. This is M4's
+ * `LimitCounter` lesson repeated, and it is not a style preference: the obvious
+ * design — one row with an in-place reset when `resetAt` passes — lets two
+ * concurrent requests both read the stale timestamp, both zero the counter, and
+ * both then spend a full window's budget inside the same second. There is
+ * nothing to reset, so there is nothing to race on.
+ */
+model VelocityCounter {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  dimension VelocityDimension
+  /** The window's length as a label: "1m" | "10m" | "1h" | "1d". */
+  window    String
+  /** The window instance — floor(now / windowMs), as a string. */
+  bucketKey String            @map("bucket_key")
+
+  count      Int      @default(0)
+  valueMinor BigInt   @default(0) @map("value_minor")
+  resetAt    DateTime @map("reset_at") @db.Timestamptz()
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dimension, window, bucketKey])
+  @@index([resetAt])
+}
+
+/**
+ * Login attempts, for credential-stuffing and ATO detection.
+ *
+ * `userId` is nullable ON PURPOSE: the most interesting attempts are the ones
+ * against identifiers that do not exist. A bot spraying a leaked credential dump
+ * mostly misses, and a table that only recorded hits would be blind to the spray
+ * — so the row keys on `identifierHash`, which exists whether the user does.
+ */
+model AuthAttempt {
+  id     String  @id @default(uuid()) @db.Uuid
+  userId String? @map("user_id") @db.Uuid
+
+  /** Salted HMAC of the phone/email. Never the identifier — this table is a target. */
+  identifierHash String  @map("identifier_hash")
+  ipHash         String  @map("ip_hash")
+  deviceRef      String? @map("device_ref") @db.Uuid
+  success        Boolean
+  /** OTP_WRONG | OTP_EXPIRED | PROVIDER_ERROR | OK — for the analyst's read. */
+  outcome        String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([identifierHash, createdAt])
+  @@index([ipHash, createdAt])
+}
+
+/**
+ * The cross-user link graph — mule rings and synthetic-identity farms.
+ *
+ * Fraud rings are visible in the RELATIONSHIPS between accounts, not in any
+ * single account, which is the same insight behind NPCI's MuleHunter. Every time
+ * two users are observed sharing an artefact — a device, a beneficiary, a VPA, an
+ * IP block — an edge is written. Over time, device farming shows up as one device
+ * with five "users", and a fan-in mule pattern as twenty accounts paying three
+ * beneficiaries.
+ *
+ * `sharedKeyHash` is a salted HMAC, so the graph reasons about STRUCTURE without
+ * a central plaintext record of who transacted with whom.
+ */
+model EntityLink {
+  id          String @id @default(uuid()) @db.Uuid
+  ownerUserId String @map("owner_user_id") @db.Uuid
+  /** The counterpart, when it is one of ours. Null for an external artefact. */
+  linkedUserId String? @map("linked_user_id") @db.Uuid
+
+  linkType      EntityLinkType @map("link_type")
+  sharedKeyHash String         @map("shared_key_hash")
+
+  /** How many times this pairing has been observed. Repetition is signal. */
+  observations Int   @default(1)
+  weight       Float @default(1)
+
+  /** Assigned by the async connected-components job. Null until it first runs. */
+  clusterId String? @map("cluster_id") @db.Uuid
+
+  firstSeenAt DateTime @default(now()) @map("first_seen_at") @db.Timestamptz()
+  lastSeenAt  DateTime @default(now()) @updatedAt @map("last_seen_at") @db.Timestamptz()
+
+  ownerUser User @relation("linkOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  @@unique([ownerUserId, linkType, sharedKeyHash])
+  @@index([sharedKeyHash, linkType])
+  @@index([clusterId])
+  @@index([linkedUserId])
+}
+
+/**
+ * Cached per-user graph risk. Written ASYNCHRONOUSLY, read inline.
+ *
+ * This split is what keeps a transfer fast. Recomputing connected components and
+ * cluster features is expensive and cannot sit in the payment path, so the job
+ * does it on a schedule and the hot path only reads one indexed row. The cost is
+ * staleness, which is the right trade: a mule ring does not form in the seconds
+ * between two transfers.
+ */
+model GraphNodeScore {
+  id         String @id @default(uuid()) @db.Uuid
+  nodeUserId String @unique @map("node_user_id") @db.Uuid
+
+  /** 0..1. Derived from degree, cluster size, and fan-in/out shape. */
+  muleScore Float   @default(0) @map("mule_score")
+  clusterId String? @map("cluster_id") @db.Uuid
+  /** Distinct link edges touching this node. */
+  degree    Int     @default(0)
+  /** Size of the component this node sits in. A big cluster is the signal. */
+  clusterSize Int   @default(1) @map("cluster_size")
+
+  computedAt DateTime @default(now()) @map("computed_at") @db.Timestamptz()
+
+  user User @relation(fields: [nodeUserId], references: [id], onDelete: Cascade)
+
+  @@index([muleScore])
+  @@index([clusterId])
+}
+
+/**
+ * Watchlists, blocklists, the mule registry and sanctions.
+ *
+ * `valueHash` is a salted HMAC of the listed identifier, for the same reason as
+ * `EntityLink`: this table names people and accounts believed to be criminal, and
+ * a plaintext version of it is both a privacy liability and — if it leaked — a
+ * roadmap telling those accounts they are known.
+ *
+ * `kind` decides severity. `WATCH` contributes a weighted signal; `BLOCK`,
+ * `MULE` and `SANCTIONS` are hard and bypass scoring entirely.
+ */
+model ListEntry {
+  id         String         @id @default(uuid()) @db.Uuid
+  kind       ListKind
+  entityType ListEntityType @map("entity_type")
+  valueHash  String         @map("value_hash")
+
+  reason String
+  /** "analyst" | "sanctions_feed" | "mule_confirmed" — provenance for an appeal. */
+  source String
+
+  active Boolean @default(true)
+
+  addedById String?   @map("added_by_id") @db.Uuid
+  addedAt   DateTime  @default(now()) @map("added_at") @db.Timestamptz()
+  /** A time-boxed listing. Null means indefinite. */
+  expiresAt DateTime? @map("expires_at") @db.Timestamptz()
+
+  addedBy AdminUser? @relation(fields: [addedById], references: [id], onDelete: SetNull)
+
+  @@unique([kind, entityType, valueHash])
+  @@index([entityType, valueHash, active])
+}
+
+/**
+ * An analyst's fraud case — the human-in-the-loop guarantee.
+ *
+ * Every non-`ALLOW` high-stakes outcome becomes one of these, and that is what
+ * makes an automated `HOLD` defensible: the user's money is delayed, not lost,
+ * and there is a named person and an appeal path. Two terminal outcomes matter —
+ * `CLEARED` releases the held action and feeds a whitelist signal back so the
+ * same benign behaviour is not re-flagged, and `CONFIRMED_FRAUD` blocks, lists
+ * the artefacts, and (cross-border) routes to compliance for STR filing.
+ */
+model FraudCase {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  /**
+   * The assessment that opened it. UNIQUE, and that uniqueness is the
+   * idempotency: re-scoring the same action must not open a second case, and a
+   * retried request that scores identically is exactly that.
+   */
+  assessmentId String? @unique @map("assessment_id") @db.Uuid
+
+  status   FraudCaseStatus @default(OPEN)
+  severity FraudSeverity
+
+  /** Comma-joined signal types. The one-line "why" a queue row shows. */
+  reason      String
+  subjectType RiskSubjectType @map("subject_type")
+  subjectId   String          @map("subject_id")
+
+  assignedAnalystId String?   @map("assigned_analyst_id") @db.Uuid
+  slaDueAt          DateTime? @map("sla_due_at") @db.Timestamptz()
+  resolution        String?
+
+  /**
+   * Whether the held action was actually released/blocked downstream.
+   *
+   * Separate from `status` because they can genuinely disagree: a case may be
+   * CLEARED while the release fails (the transaction expired meanwhile). A single
+   * field would report success for an action that never happened.
+   */
+  actionApplied Boolean @default(false) @map("action_applied")
+  actionResult  String? @map("action_result")
+
+  openedAt   DateTime  @default(now()) @map("opened_at") @db.Timestamptz()
+  resolvedAt DateTime? @map("resolved_at") @db.Timestamptz()
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assessment     RiskAssessment? @relation(fields: [assessmentId], references: [id], onDelete: SetNull)
+  assignedAnalyst AdminUser?     @relation(fields: [assignedAnalystId], references: [id], onDelete: SetNull)
+  notes          FraudCaseNote[]
+
+  @@index([status, severity])
+  @@index([assignedAnalystId, status])
+  @@index([userId])
+  @@index([subjectType, subjectId])
+}
+
+/**
+ * A user's own authentication factors — the transaction PIN and the biometric enrolment.
+ *
+ * ## Why this is its own model rather than columns on `User`
+ *
+ * A credential hash on the `User` row leaks into every query that does not name its columns,
+ * and this codebase has ten `prisma.user.findUnique({ where })` calls with no `select` — in
+ * M4's transfer path, M5's policy path, the risk engine. Every one of those would pull a PIN
+ * hash into memory, into a log line on error, and into any response that spread the row.
+ * A separate model makes that impossible rather than merely discouraged.
+ *
+ * It also gives the PIN its own lifecycle: `pinUpdatedAt` and the lockout fields change on a
+ * cadence that has nothing to do with a user's profile, and mixing them would make
+ * `User.updatedAt` meaningless.
+ *
+ * ## What this is NOT
+ *
+ * Not the UPI PIN. That is registered against the user's bank account, entered in NPCI's
+ * Common Library — a component only a certified PSP may embed — and validated by the issuing
+ * bank's HSM. Pravaah never sees it, and M4 says so in eleven places. THIS is Pravaah's own
+ * app-level factor, authorising an instruction inside our wallet, and the copy the user reads
+ * says exactly that so the two can never be confused. Conflating them would be a phishing
+ * vector we built ourselves.
+ */
+model UserCredential {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @unique @map("user_id") @db.Uuid
+
+  /**
+   * bcrypt hash of the transaction PIN. Never the PIN.
+   *
+   * bcrypt rather than a plain sha256 because a 4-to-6 digit PIN has at most a million
+   * candidates — a fast hash is enumerable in under a second on any GPU, so the hash would be
+   * equivalent to storing the PIN. bcrypt's work factor is the only thing that makes the
+   * stored value worth less than the secret.
+   *
+   * Nullable: a user who has not enrolled has no PIN, which is a different state from an
+   * empty one and is what routes them to the OTP factor instead.
+   */
+  pinHash String? @map("pin_hash")
+
+  pinSetAt     DateTime? @map("pin_set_at") @db.Timestamptz()
+  pinUpdatedAt DateTime? @map("pin_updated_at") @db.Timestamptz()
+
+  /**
+   * Consecutive wrong PINs. Reset to zero on a correct one.
+   *
+   * Counted SERVER-SIDE, and that is the point. A client-side counter is a counter an attacker
+   * reinstalls their way out of, which would turn a six-digit PIN into an unlimited guessing
+   * game — and six digits is only a million tries.
+   */
+  pinAttempts Int @default(0) @map("pin_attempts")
+
+  /**
+   * While in the future, the PIN is refused outright.
+   *
+   * A lockout rather than a permanent block: locking somebody out of their own money forever
+   * because they mistyped is not a security control, it is a support queue. Unlocking goes
+   * through the SMS-OTP reset path, which restarts the device cooling-off.
+   */
+  pinLockedUntil DateTime? @map("pin_locked_until") @db.Timestamptz()
+
+  /**
+   * When the user last enrolled biometrics on a device, and at what strength.
+   *
+   * Recorded so the console can see whether an account has a real second factor, and so the
+   * risk ladder can prefer a factor the user actually has. NOT trusted as proof of anything:
+   * the biometric check happens on the handset and this column is the client's report of it.
+   * `BIOMETRIC_STRONG` from a rooted device is a claim, which is why device integrity is
+   * scored separately.
+   */
+  biometricEnrolledAt DateTime? @map("biometric_enrolled_at") @db.Timestamptz()
+  /** NONE | SECRET | BIOMETRIC_WEAK | BIOMETRIC_STRONG, as the OS reported it. */
+  biometricLevel      String?   @map("biometric_level")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/** Append-only note trail on a case. The audit an insider cannot quietly edit. */
+model FraudCaseNote {
+  id        String @id @default(uuid()) @db.Uuid
+  caseId    String @map("case_id") @db.Uuid
+  analystId String @map("analyst_id") @db.Uuid
+
+  note String
+  /** "HELD_RELEASED" | "USER_BLOCKED" | "STR_FILED" | "ESCALATED" | null. */
+  action String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  case    FraudCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  analyst AdminUser @relation(fields: [analystId], references: [id], onDelete: Cascade)
+
+  @@index([caseId, createdAt])
 }
 
 // Append-only audit trail (no updates/deletes at the application layer)

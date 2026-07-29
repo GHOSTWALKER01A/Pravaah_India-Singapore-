@@ -11,7 +11,7 @@
  * the change. The indicator is measured from the real laid-out width, so it is
  * correct at any label length and in any language.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import Animated, {
   useAnimatedStyle,
@@ -64,9 +64,9 @@ export function Segmented<T extends string>({
   const slot = width > 0 ? width / segments.length : 0;
   const x = useSharedValue(0);
 
-  const onLayout = useCallback((e: LayoutChangeEvent) => {
+  const onLayout = (e: LayoutChangeEvent) => {
     setWidth(e.nativeEvent.layout.width);
-  }, []);
+  };
 
   // Driven from the resolved index rather than from the tap, so a value changed
   // from outside animates too. In an effect, not in render: assigning to a shared

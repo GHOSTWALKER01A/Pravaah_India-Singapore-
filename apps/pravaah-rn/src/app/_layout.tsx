@@ -7,7 +7,7 @@ import {
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useMemo } from 'react';
+import { useEffect } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -61,23 +61,21 @@ function Navigation() {
   const p = usePalette();
   const scheme = useScheme();
 
-  const navTheme = useMemo<Theme>(() => {
-    const base = scheme === 'dark' ? DarkTheme : DefaultTheme;
-    return {
-      ...base,
-      dark: scheme === 'dark',
-      colors: {
-        ...base.colors,
-        primary: p.latent,
-        background: p.ground,
-        card: p.ground,
-        text: p.ink,
-        border: p.rule,
-        notification: p.carmine,
-      },
-      fonts: base.fonts,
-    };
-  }, [scheme, p]);
+  const base = scheme === 'dark' ? DarkTheme : DefaultTheme;
+  const navTheme: Theme = {
+    ...base,
+    dark: scheme === 'dark',
+    colors: {
+      ...base.colors,
+      primary: p.latent,
+      background: p.ground,
+      card: p.ground,
+      text: p.ink,
+      border: p.rule,
+      notification: p.carmine,
+    },
+    fonts: base.fonts,
+  };
 
   return (
     <NavThemeProvider value={navTheme}>

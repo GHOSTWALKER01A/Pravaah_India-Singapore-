@@ -66,6 +66,8 @@
   html {
     scroll-behavior: smooth;
     -webkit-text-size-adjust: 100%;
+    /* A hash link must not land its target under the header band. */
+    scroll-padding-top: 2rem;
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -89,11 +91,18 @@
     font-synthesis-weight: none;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
-  }
 
-  /* The sheet is a fixed-width object; nothing may push it sideways. */
-  body {
-    overflow-x: hidden;
+    /* The sheet is a fixed-width object; nothing may push it sideways.
+       `clip`, never `hidden`, and the difference is load-bearing rather than
+       stylistic. Per CSS overflow, an element with one axis set to `hidden`
+       computes the OTHER axis to `auto` — so `overflow-x: hidden` silently
+       turned <body> into a scroll container. Two things broke as a result:
+       `animation-timeline: view()` resolved against that phantom scrollport
+       instead of the viewport (so the thread and latent panel were driven by a
+       box that never scrolls), and Lenis measured its scroll limit against a
+       nested scroller, which is what made the page stop partway down and
+       refuse to continue. `clip` clips without ever creating a scroll box. */
+    overflow-x: clip;
   }
 
   ::selection {
@@ -352,16 +361,26 @@
   }
 }
 
+/*
+  Composited properties only — opacity, filter and transform.
+
+  The first version animated `letter-spacing`, which is a layout property: on a
+  scroll-driven timeline that means the browser reflows the document on every
+  scroll frame, and the sheet carries several thousand-segment guilloche paths
+  that then have to repaint with it. That is what made a fast scroll hitch and
+  stall mid-page. The tilt-reveal reads the same resolving-out-of-the-paper way
+  from a slight scale, and costs nothing per frame.
+*/
 @keyframes latent-resolve {
   from {
     opacity: 0.14;
     filter: blur(6px);
-    letter-spacing: 0.24em;
+    transform: scale(1.035);
   }
   to {
     opacity: 1;
     filter: blur(0);
-    letter-spacing: 0.02em;
+    transform: scale(1);
   }
 }
 
@@ -370,12 +389,26 @@
   animation: thread-draw linear both;
   animation-timeline: view();
   animation-range: entry 10% cover 62%;
+  will-change: transform;
 }
 
 .latent-panel {
+  /* Its own layer, so resolving it never repaints the rosette behind it. */
+  transform-origin: left center;
   animation: latent-resolve 900ms var(--ease-note) both;
   animation-timeline: view();
   animation-range: entry 30% cover 46%;
+  will-change: opacity, filter, transform;
+}
+
+/*
+  Decorative geometry is expensive to paint and never changes. Isolating it
+  keeps a scroll frame from re-rasterising a 1,400-segment path because
+  something above it moved.
+*/
+.engraved {
+  contain: paint;
+  will-change: transform;
 }
 
 /* Browsers without scroll-driven animations get the resolved end state, not

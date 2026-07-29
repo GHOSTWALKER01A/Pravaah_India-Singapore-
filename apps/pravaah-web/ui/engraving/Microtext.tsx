@@ -24,7 +24,7 @@ export function Microtext({
 
   return (
     <div
-      className={cn("microtext overflow-hidden", className)}
+      className={cn("microtext overflow-clip", className)}
       aria-hidden="true"
     >
       {line}

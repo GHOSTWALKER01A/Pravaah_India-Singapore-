@@ -17,6 +17,7 @@ import { ConsentService } from '@/modules/consent/services/consent.service'
 import { DataLifeService } from '@/modules/consent/services/data-life.service'
 import { DataSessionService } from '@/modules/consent/services/data-session.service'
 import { FiNormalizerService } from '@/modules/consent/services/fi-normalizer.service'
+import { FraudModule } from '@/modules/fraud/fraud.module'
 
 /**
  * M1 — Consent & Data Aggregation (Account Aggregator).
@@ -32,7 +33,14 @@ import { FiNormalizerService } from '@/modules/consent/services/fi-normalizer.se
  * normalisation and data-life logic never change — only the routing does.
  */
 @Module({
-  imports: [PassportModule],
+  /**
+   * M6, for consent-farming detection (T11) on the creation path.
+   *
+   * Automated bulk consent creation is how somebody harvests data or probes the AA rail at
+   * scale, and it is invisible to the per-purpose duplicate check M1 already has — that
+   * check stops the same purpose twice, not fifty different purposes from one device.
+   */
+  imports: [PassportModule, FraudModule],
   controllers: [
     ConsentController,
     AaWebhookController,

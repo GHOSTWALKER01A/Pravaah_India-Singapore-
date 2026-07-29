@@ -13,11 +13,17 @@ import { encryptField } from '@/common/crypto/field-crypto.util'
 import { AuditService } from '@/modules/audit/audit.service'
 import { PrismaService } from '@/modules/database/prisma/prisma.service'
 
-import { ConsentStatus, FiType, KycStatus } from 'generated/prisma/client'
+import {
+  ConsentStatus,
+  KycStatus,
+  RiskDecision,
+  RiskSubjectType,
+} from 'generated/prisma/client'
 
 import { AaProviderRegistry } from '@/modules/consent/providers/aa/aa-registry'
 import { verifyArtefactSignature } from '@/modules/consent/providers/aa/artefact.util'
 import { canTransition, isRevocable } from '@/modules/consent/consent.state'
+import { RiskService } from '@/modules/fraud/services/risk.service'
 
 /** Approval window: the user must approve at the AA within 30 minutes. */
 const APPROVAL_WINDOW_MS = 30 * 60_000
@@ -30,6 +36,14 @@ export class ConsentService {
     private readonly registry: AaProviderRegistry,
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    /**
+     * M6's risk engine, for consent-farming detection (T11).
+     *
+     * The full engine rather than just `VelocityService`, because the interesting case is
+     * bulk consent creation from ONE device across MANY accounts — which is a device and
+     * graph question, not only a rate question.
+     */
+    private readonly risk: RiskService,
     @Inject(APP_LOGGER) logger: AppLogger,
   ) {
     this.logger = logger.child({ context: ConsentService.name })
@@ -51,7 +65,8 @@ export class ConsentService {
   }> {
     // GUARD 1: user must be M0-VERIFIED and not suspended.
     const user = await this.prisma.user.findUnique({ where: { id: userId } })
-    if (!user) throw new NotFoundException('Complete identity verification first')
+    if (!user)
+      throw new NotFoundException('Complete identity verification first')
     if (user.kycStatus !== KycStatus.VERIFIED) {
       throw new ForbiddenException('Complete identity verification first')
     }
@@ -88,9 +103,47 @@ export class ConsentService {
       }
     }
 
+    /**
+     * GUARD 4: consent farming (M6 · T11).
+     *
+     * Automated bulk consent creation, either to harvest data or to probe the AA rail.
+     * Scored rather than rate-limited, because the two look identical at low volume and a
+     * flat rate limit would block a legitimate user reconnecting several banks in one
+     * sitting — which is the normal onboarding path and the one that must stay smooth.
+     *
+     * Placed AFTER the duplicate check on purpose: a user retrying the same purpose reuses
+     * the existing consent and returns above, so retries never inflate the velocity
+     * counter against them. Scoring before that check would penalise a client with a flaky
+     * connection.
+     *
+     * A `BLOCK` is refused; anything softer proceeds. Data access is not money, so a hold
+     * would mean a consent nobody can approve and no route out — the honest control here is
+     * to let it through and let the case tell an analyst.
+     */
+    const riskOutcome = await this.risk.scoreConsent({
+      userId,
+      subjectType: RiskSubjectType.CONSENT,
+      subjectId: `consent:${dto.purposeCode}`,
+      sensitive: true,
+    })
+
+    if (riskOutcome.decision === RiskDecision.BLOCK) {
+      this.logger.warn('[create] Consent refused on risk', {
+        userId,
+        score: riskOutcome.score,
+        reasons: riskOutcome.reasons,
+      })
+      throw new ForbiddenException(
+        riskOutcome.reasons[0] ??
+          'We cannot set up data sharing on this account right now. Please contact support.',
+      )
+    }
+
     const handle = process.env.AA_HANDLE ?? 'onemoney'
     const vua = `${user.phone.replace(/^\+/, '')}@${handle}`
-    const consentExpiry = new Date(Date.now() + APPROVAL_WINDOW_MS).toISOString()
+    const consentExpiry = new Date(
+      Date.now() + APPROVAL_WINDOW_MS,
+    ).toISOString()
     // Prefer the deep link the app passed (so the AA redirects to exactly the
     // URL the in-app auth session is waiting for → auto-close). Fall back to the
     // configured APP_DEEPLINK.
@@ -118,8 +171,9 @@ export class ConsentService {
     // The first that succeeds owns the consent; its name is persisted so every
     // later call routes back to it.
     const order = this.registry.createOrder()
-    let res: Awaited<ReturnType<(typeof order)[number]['createConsent']>> | null =
-      null
+    let res: Awaited<
+      ReturnType<(typeof order)[number]['createConsent']>
+    > | null = null
     let winner: string | null = null
     for (const provider of order) {
       const attempt = await provider.createConsent(input)
@@ -153,7 +207,7 @@ export class ConsentService {
         fetchType: dto.fetchType,
         frequencyUnit: dto.frequency?.unit,
         frequencyValue: dto.frequency?.value,
-        fiTypes: dto.fiTypes as FiType[],
+        fiTypes: dto.fiTypes,
         dataRangeFrom: from,
         dataRangeTo: to,
         dataLifeUnit: dto.dataLife.unit,
@@ -247,13 +301,9 @@ export class ConsentService {
           ? encryptField(signedArtefact)
           : consent.signedArtefact,
         activatedAt:
-          newStatus === ConsentStatus.ACTIVE
-            ? new Date()
-            : consent.activatedAt,
+          newStatus === ConsentStatus.ACTIVE ? new Date() : consent.activatedAt,
         revokedAt:
-          newStatus === ConsentStatus.REVOKED
-            ? new Date()
-            : consent.revokedAt,
+          newStatus === ConsentStatus.REVOKED ? new Date() : consent.revokedAt,
       },
     })
     await this.audit.log({

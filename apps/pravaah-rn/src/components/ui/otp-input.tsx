@@ -46,6 +46,34 @@ interface OtpInputProps {
   error?: boolean;
   onComplete?: (code: string) => void;
   editable?: boolean;
+  /**
+   * Mask the digits and disable every autofill route. Set this for a PIN, never for an OTP.
+   *
+   * ## Why the same component and not a second one
+   *
+   * The cells, the spring, the shake and the blinking caret are the same, and duplicating them
+   * would mean the PIN pad quietly drifting away from the code field it sits beside — different
+   * contrast, a shake that fires on different terms, a caret out of phase. One implementation,
+   * one behaviour.
+   *
+   * ## What `secure` actually changes, and why each part is necessary
+   *
+   *  - **Masking.** A PIN is reused across sessions; an OTP is dead in five minutes. Showing a
+   *    PIN in plaintext hands it to anyone glancing at the screen, and to every screen recording
+   *    the user has running.
+   *  - **Autofill OFF.** This is the more important half. The OTP field advertises itself as
+   *    `oneTimeCode`/`sms-otp` so the OS can fill it from an SMS — correct there, actively
+   *    harmful here. A PIN field claiming to be a one-time code invites the OS to paste an
+   *    unrelated SMS code into it, and worse, teaches the keychain to file a long-lived payment
+   *    secret as a disposable one. So the secure variant declares no content type at all.
+   *
+   * A limit worth naming: this does not stop a SCREENSHOT. Android's `FLAG_SECURE` and iOS's
+   * screen-capture notifications are native-side controls with no JS equivalent, so blocking
+   * capture is a config-plugin change rather than something this component can honestly claim.
+   */
+  secure?: boolean;
+  /** Overrides the screen-reader label. Defaults to a description of the field's purpose. */
+  accessibilityLabel?: string;
 }
 
 export function OtpInput({
@@ -56,6 +84,8 @@ export function OtpInput({
   error = false,
   onComplete,
   editable = true,
+  secure = false,
+  accessibilityLabel,
 }: OtpInputProps) {
   const p = usePalette();
   const motionOk = useMotionOk();
@@ -129,6 +159,7 @@ export function OtpInput({
             active={focused && editable && i === activeIndex}
             error={error}
             caret={caret}
+            secure={secure}
           />
         ))}
 
@@ -143,11 +174,36 @@ export function OtpInput({
           keyboardType="number-pad"
           maxLength={length}
           caretHidden
-          // OS SMS autofill. Kept exactly as the incumbent had it — it worked.
-          textContentType="oneTimeCode"
-          autoComplete={Platform.OS === 'android' ? 'sms-otp' : 'one-time-code'}
-          importantForAutofill="yes"
-          accessibilityLabel={`${length}-digit verification code`}
+          /**
+           * OS SMS autofill — kept exactly as the incumbent had it for the OTP case, and
+           * switched OFF entirely for a PIN. See the `secure` prop for why the second half is
+           * the more important one.
+           */
+          textContentType={secure ? 'none' : 'oneTimeCode'}
+          autoComplete={
+            secure
+              ? 'off'
+              : Platform.OS === 'android'
+                ? 'sms-otp'
+                : 'one-time-code'
+          }
+          importantForAutofill={secure ? 'no' : 'yes'}
+          /**
+           * `secureTextEntry` in addition to the visual masking, and not instead of it.
+           *
+           * The real input is invisible, so this changes nothing on screen — what it changes is
+           * the KEYBOARD's behaviour: it suppresses predictive text, the clipboard bar, and the
+           * keystroke logging that some third-party IMEs perform on non-secure fields. Masking
+           * the cells alone would leave a PIN typed into a field the keyboard felt free to
+           * remember.
+           */
+          secureTextEntry={secure}
+          accessibilityLabel={
+            accessibilityLabel ??
+            (secure
+              ? `${length}-digit PIN`
+              : `${length}-digit verification code`)
+          }
           style={styles.hiddenInput}
         />
       </Pressable>
@@ -160,10 +216,13 @@ function Cell({
   active,
   error,
   caret,
+  secure,
 }: {
   char: string;
   active: boolean;
   error: boolean;
+  /** Render a dot rather than the digit. */
+  secure: boolean;
   /**
    * The blink driver itself, not a built style. One timer in the parent drives
    * every cell (so they blink in phase), but the style is derived HERE — an
@@ -201,7 +260,19 @@ function Cell({
         },
       ]}
     >
-      {char ? (
+      {char && secure ? (
+        /**
+         * The dot rides the SAME `digitStyle` spring as a digit would.
+         *
+         * So a masked PIN lands with the identical physical response as a visible code — the
+         * feedback that tells the user a key registered is not the glyph, it is the strike, and
+         * a mask that dropped the animation would make the PIN pad feel unresponsive next to
+         * the OTP field it sits beside.
+         */
+        <Animated.View style={digitStyle}>
+          <View style={[styles.dot, { backgroundColor: p.ink }]} />
+        </Animated.View>
+      ) : char ? (
         // An Animated.View wrapping a plain Text, not an Animated.Text: the
         // animated style here is a transform, and Reanimated types a transform
         // style as a view style — passing it to Animated.Text is a type error and
@@ -239,6 +310,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   digit: { fontSize: 26, lineHeight: 32, fontVariant: ['tabular-nums'] },
+  /**
+   * A fixed 12dp disc, deliberately NOT scaled by the OS text size.
+   *
+   * A dot carries no information, so growing it with the type scale would only crowd the 58dp
+   * cell it lives in — and unlike a digit, there is nothing to become unreadable. The
+   * accessibility answer for a masked field is the screen-reader label on the input, which
+   * announces the field's purpose and the count, not the size of the mask.
+   */
+  dot: { width: 12, height: 12, borderRadius: 6 },
   caret: { width: Hairline.thick + 0.5, height: 24 },
   hiddenInput: {
     ...StyleSheet.absoluteFillObject,

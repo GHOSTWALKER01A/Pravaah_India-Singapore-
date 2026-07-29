@@ -3,8 +3,22 @@
   "display": "NestJS",
   "extends": "./base.json",
   "compilerOptions": {
-    "module": "CommonJS",
-    "moduleResolution": "node",
+    // `Preserve` + `bundler`, not the previous `CommonJS` + `node`.
+    //
+    // `moduleResolution: "node"` means node10, which TypeScript 6 reports as a hard
+    // ERROR rather than a warning — so the old pairing failed `check-types` outright.
+    //
+    // This pair is what the monorepo's other tsdown-built package (`@pravaah/schema`)
+    // already uses, and it is right here for the same reason: tsc only ever runs with
+    // `--noEmit` for these packages, and tsdown owns the real emit (`format: ['cjs']`).
+    // The module setting therefore governs typechecking alone — confirmed by rebuilding
+    // `@pravaah/nestjs-logger` and checking `dist/index.cjs` and `dist/index.d.cts` came
+    // out byte-identical.
+    //
+    // A Nest APPLICATION that emits with tsc should not extend this file. `pravaah-be`
+    // already declares its own `nodenext` config, which is why nothing else is affected.
+    "module": "Preserve",
+    "moduleResolution": "bundler",
     "allowJs": true,
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,

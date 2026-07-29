@@ -1,5 +1,5 @@
 import { Redirect, router } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { ApiError } from '@/api';
@@ -39,35 +39,38 @@ export default function VerifyOtpScreen() {
     return () => clearInterval(id);
   }, [cooldown]);
 
-  const verify = useCallback(
-    async (codeValue: string) => {
-      if (busy.current || codeValue.length !== OTP_LENGTH) return;
-      busy.current = true;
-      setError(null);
-      setNotice(null);
-      setLoading(true);
-      try {
-        await verifyOtp(codeValue);
-        haptic.cleared();
-        router.replace(ROUTES.AUTH.ONBOARDING);
-      } catch (err) {
-        // The shake, the haptic and the message are one event. A wrong code is
-        // the most common failure in the whole app and it has to be unmistakable
-        // without being punishing.
-        haptic.refused();
-        setError(
-          err instanceof ApiError
-            ? err.message
-            : 'That code was not right, or it has expired. Check the last message and try again.',
-        );
-        setOtp('');
-      } finally {
-        setLoading(false);
-        busy.current = false;
-      }
-    },
-    [verifyOtp],
-  );
+  /**
+   * Handed to `<OtpInput onComplete>`, which names it in an effect dependency array — so a
+   * changing identity would ordinarily be a re-submit hazard. It is not one here: that effect
+   * is latched by a `completedRef`, and this function is additionally guarded by `busy`, so a
+   * re-run cannot produce a second verification of the same code.
+   */
+  const verify = async (codeValue: string) => {
+    if (busy.current || codeValue.length !== OTP_LENGTH) return;
+    busy.current = true;
+    setError(null);
+    setNotice(null);
+    setLoading(true);
+    try {
+      await verifyOtp(codeValue);
+      haptic.cleared();
+      router.replace(ROUTES.AUTH.ONBOARDING);
+    } catch (err) {
+      // The shake, the haptic and the message are one event. A wrong code is
+      // the most common failure in the whole app and it has to be unmistakable
+      // without being punishing.
+      haptic.refused();
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : 'That code was not right, or it has expired. Check the last message and try again.',
+      );
+      setOtp('');
+    } finally {
+      setLoading(false);
+      busy.current = false;
+    }
+  };
 
   async function resend() {
     if (cooldown > 0 || resending) return;

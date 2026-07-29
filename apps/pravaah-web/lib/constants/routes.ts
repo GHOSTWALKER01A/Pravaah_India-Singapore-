@@ -2,6 +2,7 @@ import { MOBILE_APP } from "@/lib/config/site";
 
 export const ROUTES = {
   HOME: "/",
+  WHAT_IS_BUILT: "/what-is-built",
   HOW_TO_APPLY: "/how-to-apply",
   SECURITY: "/security",
   LEGAL: {
@@ -12,9 +13,16 @@ export const ROUTES = {
   GET_APP: MOBILE_APP.openPath,
 } as const;
 
-/** Primary navigation. Order is the reading order a first-time visitor needs. */
+/**
+ * Primary navigation. Order is the reading order a first-time visitor needs.
+ *
+ * "What's built" sits second, immediately after the explanation of the
+ * mechanism, because it answers the question every other page's credibility
+ * rests on. Putting it last would be hiding the evidence behind the argument.
+ */
 export const NAV_ITEMS: ReadonlyArray<{ label: string; href: string }> = [
   { label: "How it works", href: ROUTES.HOME + "#how-it-works" },
+  { label: "What's built", href: ROUTES.WHAT_IS_BUILT },
   { label: "How to apply", href: ROUTES.HOW_TO_APPLY },
   { label: "Security", href: ROUTES.SECURITY },
   { label: "Rules", href: ROUTES.LEGAL.RULES },
@@ -42,7 +50,7 @@ export const DOCUMENTS: ReadonlyArray<{
   {
     label: "Terms",
     href: ROUTES.LEGAL.TERMS,
-    blurb: "The agreement between you and Pravaah.",
+    blurb: "The agreement between you and MyPravaah.",
   },
   {
     label: "Security",

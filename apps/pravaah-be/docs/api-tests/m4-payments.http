@@ -1,0 +1,785 @@
+
+########################################################################
+# PRAVAAH · M4 — Cross-Border Money Movement (UPI ↔ PayNow · ledger · idempotency)
+#
+# VS Code "REST Client" / JetBrains HTTP client.  Base = /api/v1/...
+#
+# M3 made a person's reputation trustworthy across borders. M4 is what ACTS on
+# that trust: it moves money.
+#
+# ─── READ THIS BEFORE SENDING ANYTHING ────────────────────────────────────
+#
+# 1. EVERY MUTATION NEEDS AN `Idempotency-Key`.
+#    Not optional, and the 400 you get without one is the point: a client that
+#    forgets it would have its retry treated as a NEW payment. Change the key
+#    when you mean a new payment; REUSE it to prove a retry replays.
+#
+# 2. AMOUNTS ARE INTEGER MINOR-UNIT STRINGS.
+#    `"10000"` is ₹100.00 or S$100.00 — paise and cents, never rupees. Sent as
+#    strings because `JSON.parse` turns any numeric literal into a float before
+#    a line of our code runs, and there is no way to detect afterwards whether
+#    the value we hold is the value that was sent.
+#
+# 3. EVERY TRANSFER NEEDS A QUOTE FIRST.
+#    Including domestic ones, where there is nothing to convert. A quote is a
+#    PRICED INTENT: the exact numbers the user was shown, frozen server-side,
+#    single-use, 90 seconds. The transfer reads them back rather than
+#    recomputing — otherwise the app shows one total and the server derives
+#    another, and the user is charged a figure they never agreed to.
+#
+# 4. THE PAYEE NAME MUST BE CONFIRMED.
+#    `confirmedRegisteredName` has to match what the payee's BANK holds. That
+#    is an NPCI mandate and the single most effective control against
+#    social-engineering fraud: the attacker controls the address string but not
+#    what the bank calls the account behind it. §21 shows the mismatch → 409.
+#
+# ─── PREREQUISITES ────────────────────────────────────────────────────────
+#
+#   • A VERIFIED user (M0). `npm run prisma:seed`, then complete KYC.
+#   • A UPI ID (§02) — needed to receive, to raise a collect, and to mint a QR.
+#   • Wallet balance. There is no cheat endpoint: run a topup (§05) and approve
+#     it on the mock rail (§06). That IS the real inbound path.
+#
+# ─── THE MONEY-SAFETY SHOWPIECE ───────────────────────────────────────────
+#
+#   §80 forces the rail's "late SUCCESS after we timed out" case: the transfer
+#   shows FAILED, reconciliation detects the rail actually settled, and it
+#   self-corrects to SUCCESS — booking the loss as a RECEIVABLE rather than
+#   breaking the trial balance. §90 shows the trial balance netting to zero.
+########################################################################
+
+@baseUrl = http://localhost:8000/api/v1
+@token = PASTE_A_USER_ACCESS_TOKEN
+@adminToken = PASTE_AN_ADMIN_ACCESS_TOKEN
+
+# Filled in as you go.
+@beneficiaryId = PASTE_FROM_§10
+@quoteId = PASTE_FROM_§20
+@transferId = PASTE_FROM_§21
+@collectId = PASTE_FROM_§05
+@mandateId = PASTE_FROM_§50
+@qrRef = PASTE_FROM_§40
+
+########################################################################
+# 01 · THE WALLET
+########################################################################
+
+### Balances, UPI IDs and remaining limits — the whole wallet screen.
+GET {{baseUrl}}/payments/wallet
+Authorization: Bearer {{token}}
+
+### The caps, and how much of each is left.
+# Note the ASYMMETRY: ₹1,00,000/day domestic vs SGD 1,000/day cross-border.
+# Roughly a factor of sixty. Any code that treated the two rails alike would
+# be wrong by that much — which is why `corridor` is a stored column.
+GET {{baseUrl}}/payments/limits
+Authorization: Bearer {{token}}
+
+### The account statement — LEDGER ENTRIES, not transactions.
+# A transaction list says what the user tried to do; this says what happened to
+# their money, with the reserve, the fee and the refund as separate lines. When
+# somebody disputes a balance, this is the document that answers them.
+GET {{baseUrl}}/payments/wallet/statement?limit=50
+Authorization: Bearer {{token}}
+
+########################################################################
+# 02 · YOUR UPI ID
+########################################################################
+
+### Allocate one. Idempotent — an existing active handle comes back as-is.
+POST {{baseUrl}}/payments/upi-handles
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{}
+
+### Or ask for a specific one. Reserved names (`support`, `refund`, `admin`…)
+# are refused: somebody holding `support@pravaah` could impersonate us to every
+# other user, and the fraud would be indistinguishable from an official request.
+POST {{baseUrl}}/payments/upi-handles
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "vpa": "ravi.test" }
+
+### List them.
+GET {{baseUrl}}/payments/upi-handles
+Authorization: Bearer {{token}}
+
+########################################################################
+# 05 · ADD MONEY (a collect against your OWN account)
+########################################################################
+
+### First, add your own bank account as a payee. `isSelf` is VERIFIED against
+# M0's penny-drop, never believed — it exempts the payee from the
+# new-payee cooling period, so a client-set flag would bypass it.
+POST {{baseUrl}}/payments/beneficiaries
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "handleType": "ACCOUNT_IFSC",
+  "accountNumber": "123456789012",
+  "ifsc": "HDFC0001234",
+  "displayName": "My HDFC account",
+  "isSelf": true
+}
+
+### Then top up. Returns a collect the payer (you) must approve in their bank app.
+# We never see a UPI PIN — authorisation happens in the bank/NPCI secure component.
+POST {{baseUrl}}/payments/topup
+Authorization: Bearer {{token}}
+Content-Type: application/json
+Idempotency-Key: topup-{{$guid}}
+
+{
+  "sourceBeneficiaryId": "{{beneficiaryId}}",
+  "amountMinor": "5000000",
+  "currency": "INR"
+}
+
+########################################################################
+# 06 · THE MOCK RAIL — playing the payer's PSP app
+#
+# Development only; refused when NODE_ENV=production, because these endpoints
+# carry exactly the authority a real rail has — they can approve a debit
+# against somebody's account.
+########################################################################
+
+### What is waiting for this payer, as their own app would show it.
+GET {{baseUrl}}/mock/upi/pending/123456789012%7CHDFC0001234
+
+### Approve it. Routed through the SAME method a signed webhook reaches, so the
+# credit, the ledger posting and the state machine behave exactly as in production.
+POST {{baseUrl}}/mock/upi/collect/{{collectId}}/respond
+Content-Type: application/json
+
+{ "approve": true }
+
+### Or decline — `ZA`, the real NPCI code for "declined by the customer".
+POST {{baseUrl}}/mock/upi/collect/{{collectId}}/respond
+Content-Type: application/json
+
+{ "approve": false, "reason": "Not expecting this" }
+
+########################################################################
+# 10 · PAYEES — and the name check that actually stops fraud
+########################################################################
+
+### Resolve a UPI ID to the name its BANK holds. No money moves.
+# The whole reason this is a separate call: it has to happen BEFORE the decision
+# it informs. Folded into the transfer, the name would arrive after the user had
+# already committed.
+POST {{baseUrl}}/payments/beneficiaries/resolve
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "vpa": "priya.sharma@ybl" }
+
+### Add a domestic payee.
+POST {{baseUrl}}/payments/beneficiaries
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "handleType": "UPI_VPA",
+  "vpa": "priya.sharma@ybl",
+  "displayName": "Priya"
+}
+
+### A CROSS-BORDER payee. Still a UPI ID — that is the point of the linkage:
+# the sender enters the recipient's registered UPI ID, not a PayNow proxy.
+# This one is additionally screened against the compliance watchlists, and
+# cannot be paid until that screening has actually completed (fail-closed).
+POST {{baseUrl}}/payments/beneficiaries
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "handleType": "PAYNOW_UPI",
+  "vpa": "amma.kumar@oksbi",
+  "displayName": "Amma",
+  "country": "IN"
+}
+
+### An address that does not exist → recorded INVALID with a reason, not an error.
+POST {{baseUrl}}/payments/beneficiaries
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "handleType": "UPI_VPA",
+  "vpa": "invalid.person@ybl",
+  "displayName": "Nobody"
+}
+
+### A sanctions hit → BLOCKED, and NOT unblockable by the user.
+POST {{baseUrl}}/payments/beneficiaries
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "handleType": "PAYNOW_UPI",
+  "vpa": "sanctioned.payee@oksbi",
+  "displayName": "Test screening",
+  "country": "IN"
+}
+
+### List them. Response carries `coolingPeriod` for a newly added payee, so the
+# app can explain the ₹5,000 / 24-hour cap up front instead of refusing at the
+# confirmation screen.
+GET {{baseUrl}}/payments/beneficiaries
+Authorization: Bearer {{token}}
+
+### Block one — distinct from removing, which could be undone in seconds with a
+# fresh cooling period.
+POST {{baseUrl}}/payments/beneficiaries/{{beneficiaryId}}/block
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "reason": "They scammed me" }
+
+########################################################################
+# 20 · PRICING — the locked, single-use quote
+########################################################################
+
+### Quote a DOMESTIC transfer. Rate exactly 1:1, no fee (NPCI prohibits an MDR
+# on UPI P2P/P2M, so a fee here would be non-compliance, not pricing).
+POST {{baseUrl}}/payments/quote
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "sourceCurrency": "INR",
+  "destCurrency": "INR",
+  "mode": "SOURCE",
+  "amountMinor": "250000",
+  "type": "P2P",
+  "purposeCode": "P2P_TRANSFER"
+}
+
+### Quote a CROSS-BORDER remittance from the SEND side.
+# Response shows BOTH rates — mid and customer — so the spread is visible rather
+# than implied. A remittance product that shows only its own rate is asking to be
+# trusted about the difference.
+POST {{baseUrl}}/payments/quote
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "sourceCurrency": "SGD",
+  "destCurrency": "INR",
+  "mode": "SOURCE",
+  "amountMinor": "10000",
+  "type": "REMITTANCE",
+  "purposeCode": "P1301"
+}
+
+### The same corridor from the RECEIVE side: "they must get exactly ₹20,000".
+# Rounds the SOURCE amount UP, because rounding it down would deliver a paisa
+# short of the figure the user named — and one paisa short on a school fee is a
+# rejected payment.
+POST {{baseUrl}}/payments/quote
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "sourceCurrency": "SGD",
+  "destCurrency": "INR",
+  "mode": "DEST",
+  "amountMinor": "2000000",
+  "type": "REMITTANCE",
+  "purposeCode": "P1301"
+}
+
+### 400 — a domestic transfer carrying an RBI cross-border purpose code.
+# Filing a FEMA purpose against a rupee-to-rupee payment misreports it.
+POST {{baseUrl}}/payments/quote
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "sourceCurrency": "INR",
+  "destCurrency": "INR",
+  "mode": "SOURCE",
+  "amountMinor": "250000",
+  "type": "P2P",
+  "purposeCode": "P1301"
+}
+
+########################################################################
+# 21 · SENDING MONEY
+########################################################################
+
+### Send. No amount in the body — that lives on the quote. Three confirmations
+# instead, each closing a specific failure mode.
+POST {{baseUrl}}/payments/transfers
+Authorization: Bearer {{token}}
+Content-Type: application/json
+Idempotency-Key: transfer-{{$guid}}
+
+{
+  "beneficiaryId": "{{beneficiaryId}}",
+  "quoteId": "{{quoteId}}",
+  "type": "P2P",
+  "purposeCode": "P2P_TRANSFER",
+  "narration": "Rent share",
+  "expectedTotalDebitMinor": "250000",
+  "confirmedRegisteredName": "PRIYA SHARMA",
+  "confirmedName": true
+}
+
+### RETRY THE EXACT REQUEST ABOVE with the SAME Idempotency-Key.
+# Returns the SAME transaction id. No second debit. This is the whole point.
+
+### 409 — the same key with a DIFFERENT body.
+# Not a retry: a client bug or an attack. Replaying the first response would
+# silently discard whatever this request actually asked for.
+POST {{baseUrl}}/payments/transfers
+Authorization: Bearer {{token}}
+Content-Type: application/json
+Idempotency-Key: REUSE_THE_KEY_FROM_ABOVE
+
+{
+  "beneficiaryId": "{{beneficiaryId}}",
+  "quoteId": "{{quoteId}}",
+  "type": "P2P",
+  "purposeCode": "P2P_TRANSFER",
+  "narration": "DIFFERENT NOTE",
+  "expectedTotalDebitMinor": "250000",
+  "confirmedRegisteredName": "PRIYA SHARMA",
+  "confirmedName": true
+}
+
+### 409 — the confirmed payee name does not match the record.
+# The NPCI mandate, enforced rather than displayed.
+POST {{baseUrl}}/payments/transfers
+Authorization: Bearer {{token}}
+Content-Type: application/json
+Idempotency-Key: transfer-{{$guid}}
+
+{
+  "beneficiaryId": "{{beneficiaryId}}",
+  "quoteId": "{{quoteId}}",
+  "type": "P2P",
+  "purposeCode": "P2P_TRANSFER",
+  "expectedTotalDebitMinor": "250000",
+  "confirmedRegisteredName": "SOMEBODY ELSE",
+  "confirmedName": true
+}
+
+### 409 — the total the user saw disagrees with the quote (a stale screen).
+POST {{baseUrl}}/payments/transfers
+Authorization: Bearer {{token}}
+Content-Type: application/json
+Idempotency-Key: transfer-{{$guid}}
+
+{
+  "beneficiaryId": "{{beneficiaryId}}",
+  "quoteId": "{{quoteId}}",
+  "type": "P2P",
+  "purposeCode": "P2P_TRANSFER",
+  "expectedTotalDebitMinor": "1",
+  "confirmedRegisteredName": "PRIYA SHARMA",
+  "confirmedName": true
+}
+
+### 400 — no Idempotency-Key.
+POST {{baseUrl}}/payments/transfers
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "beneficiaryId": "{{beneficiaryId}}",
+  "quoteId": "{{quoteId}}",
+  "type": "P2P",
+  "purposeCode": "P2P_TRANSFER",
+  "expectedTotalDebitMinor": "250000",
+  "confirmedRegisteredName": "PRIYA SHARMA",
+  "confirmedName": true
+}
+
+### 403 — over the corridor cap. Try SGD 2,000 cross-border (cap is SGD 1,000/day).
+# Quote it first, then send: the rejection names the cap and what remains.
+
+### Status. The client polls US, never the rail — a client asking the rail
+# directly would bypass the reconciliation that decides what an answer MEANS.
+# `isFinal` tells it when to stop polling.
+GET {{baseUrl}}/payments/transfers/{{transferId}}
+Authorization: Bearer {{token}}
+
+### The receipt: the user's own ledger movements plus any refunds.
+GET {{baseUrl}}/payments/transfers/{{transferId}}/receipt
+Authorization: Bearer {{token}}
+
+### History.
+GET {{baseUrl}}/payments/transfers?limit=25
+Authorization: Bearer {{token}}
+
+### Retry a failed one. Mints a NEW transaction against a FRESH quote — re-driving
+# the failed row would give one id two rail references and two ledger histories.
+POST {{baseUrl}}/payments/transfers/{{transferId}}/retry
+Authorization: Bearer {{token}}
+Content-Type: application/json
+Idempotency-Key: retry-{{$guid}}
+
+{
+  "quoteId": "{{quoteId}}",
+  "expectedTotalDebitMinor": "250000",
+  "confirmedRegisteredName": "PRIYA SHARMA",
+  "confirmedName": true
+}
+
+########################################################################
+# 30 · REQUESTING MONEY (collect)
+#
+# Domestic only. UPI↔PayNow is payer-initiated, so "request money from abroad"
+# is a screen that can never succeed — refused with that reason.
+########################################################################
+
+### Ask somebody to pay you.
+POST {{baseUrl}}/payments/collect
+Authorization: Bearer {{token}}
+Content-Type: application/json
+Idempotency-Key: collect-{{$guid}}
+
+{
+  "payerHandle": "priya.sharma@ybl",
+  "amountMinor": "150000",
+  "currency": "INR",
+  "purposeCode": "P2P_TRANSFER",
+  "narration": "Dinner split",
+  "expiresInSeconds": 300
+}
+
+### Requests you sent.
+GET {{baseUrl}}/payments/collect?side=RAISED
+Authorization: Bearer {{token}}
+
+### Requests for YOU to pay. A separate query, never merged: "you owe ₹500" and
+# "you are owed ₹500" are opposite facts.
+GET {{baseUrl}}/payments/collect?side=RECEIVED
+Authorization: Bearer {{token}}
+
+### Cancel one.
+POST {{baseUrl}}/payments/collect/{{collectId}}/revoke
+Authorization: Bearer {{token}}
+
+########################################################################
+# 40 · QR CODES
+########################################################################
+
+### A STATIC QR — amount-less, reusable, the shopfront sticker. Not a payment
+# instruction (the payer types the amount), so it needs no signature.
+POST {{baseUrl}}/payments/qr
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "kind": "STATIC",
+  "currency": "INR",
+  "purposeCode": "MERCHANT_PAYMENT",
+  "mcc": "5812",
+  "narration": "Chai stall"
+}
+
+### A DYNAMIC QR — amount-bearing, so it IS a payment instruction: signed,
+# short-lived, and consumed on first success. Unsigned, it could be edited in
+# transit (`am=1.00` → `am=100.00`) with the real VPA beside it.
+POST {{baseUrl}}/payments/qr
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "kind": "DYNAMIC",
+  "amountMinor": "12050",
+  "currency": "INR",
+  "purposeCode": "MERCHANT_PAYMENT",
+  "mcc": "5812",
+  "expiresInSeconds": 900
+}
+
+### Scan. Parsed SERVER-SIDE — a QR is attacker-supplied input that resolves to a
+# payee, and two parsers that disagree are two answers to "who gets the money".
+# Returns both the PRINTED name (advisory) and the BANK-REGISTERED name (the control).
+POST {{baseUrl}}/payments/qr/scan
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "payload": "upi://pay?pa=ravi.test%40pravaah&pn=Chai%20Stall&am=120.50&cu=INR" }
+
+### REJECTED — a duplicated `pa` parameter. A real attack: implementations
+# disagree about which value wins, so a preview screen can render one payee
+# while the payment uses the other. Nothing is picked.
+POST {{baseUrl}}/payments/qr/scan
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "payload": "upi://pay?pa=shop%40pravaah&pa=attacker%40evil&cu=INR" }
+
+### REJECTED — more decimal places than the currency has. `am=100.999` for rupees
+# is malformed or crafted; rounding it would resolve an ambiguity about somebody's
+# money by guessing.
+POST {{baseUrl}}/payments/qr/scan
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "payload": "upi://pay?pa=shop%40pravaah&am=100.999&cu=INR" }
+
+### Pay a scanned QR. The amount still comes from a quote: a scanned code
+# PROPOSES an amount, it does not set the price.
+POST {{baseUrl}}/payments/qr/pay
+Authorization: Bearer {{token}}
+Content-Type: application/json
+Idempotency-Key: qrpay-{{$guid}}
+
+{
+  "payload": "upi://pay?pa=priya.sharma%40ybl&pn=Priya&am=120.50&cu=INR",
+  "quoteId": "{{quoteId}}",
+  "expectedTotalDebitMinor": "12050",
+  "confirmedRegisteredName": "PRIYA SHARMA",
+  "confirmedName": true
+}
+
+########################################################################
+# 50 · UPI AUTOPAY (mandates)
+########################################################################
+
+### Set up a mandate. Returns PENDING — the payer must approve it in their own
+# app with their UPI PIN. A mandate we marked ACTIVE on creation would be a
+# standing debit permission the user never authorised.
+POST {{baseUrl}}/payments/mandates
+Authorization: Bearer {{token}}
+Content-Type: application/json
+Idempotency-Key: mandate-{{$guid}}
+
+{
+  "beneficiaryId": "{{beneficiaryId}}",
+  "frequency": "MONTHLY",
+  "amountRule": "EXACT",
+  "maxAmountMinor": "500000",
+  "currency": "INR",
+  "purposeCode": "LOAN_REPAYMENT",
+  "narration": "EMI",
+  "validFrom": "2026-08-01T00:00:00Z",
+  "validUntil": "2027-08-01T00:00:00Z",
+  "confirmedMandate": true
+}
+
+### Approve it on the mock rail — the UPI AutoPay authorisation screen.
+# This is where the UMN (UPI Mandate Number) is assigned, which is why the create
+# response does not carry one.
+POST {{baseUrl}}/mock/upi/mandate/PASTE_mandateRef
+Content-Type: application/json
+
+{ "approve": true }
+
+### The mandate, with its debit history — including SKIPPED and FAILED rows.
+# A user asking "why wasn't I charged?" needs to see that the debit was skipped
+# because their balance was short.
+GET {{baseUrl}}/payments/mandates/{{mandateId}}
+Authorization: Bearer {{token}}
+
+### Present a debit. Must be ≥24h ahead so the pre-debit notice can be sent —
+# NPCI requires it, and the scheduler REFUSES to execute a debit without one.
+POST {{baseUrl}}/payments/mandates/{{mandateId}}/debits
+Authorization: Bearer {{token}}
+Content-Type: application/json
+Idempotency-Key: debit-{{$guid}}
+
+{
+  "amountMinor": "500000",
+  "dueAt": "2026-09-01T00:00:00Z",
+  "narration": "September EMI"
+}
+
+### 400 — a debit larger than the authorised ceiling. Re-checked at debit time,
+# not only at creation: the merchant chooses the amount later.
+POST {{baseUrl}}/payments/mandates/{{mandateId}}/debits
+Authorization: Bearer {{token}}
+Content-Type: application/json
+Idempotency-Key: debit-{{$guid}}
+
+{ "amountMinor": "99900000", "dueAt": "2026-09-01T00:00:00Z" }
+
+### Pause — reversible. Revoke — permanent.
+POST {{baseUrl}}/payments/mandates/{{mandateId}}/action
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "action": "PAUSE", "reason": "Tight month" }
+
+########################################################################
+# 60 · DISPUTES (UDIR)
+########################################################################
+
+### Raise one against a payment. The SLA deadline is stamped server-side and
+# returned — an obligation the customer can hold us to, not a support promise.
+POST {{baseUrl}}/payments/transfers/{{transferId}}/dispute
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "kind": "NOT_CREDITED",
+  "description": "I was debited but my landlord says nothing arrived in his account."
+}
+
+### 409 — the same complaint retyped. One open dispute per (payment, kind).
+POST {{baseUrl}}/payments/transfers/{{transferId}}/dispute
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "kind": "NOT_CREDITED",
+  "description": "Still nothing has arrived, please look into this again."
+}
+
+### Track them.
+GET {{baseUrl}}/payments/disputes
+Authorization: Bearer {{token}}
+
+########################################################################
+# 80 · THE MONEY-SAFETY SHOWPIECE — a late settlement, corrected
+#
+# The single most expensive event in payments: we time out, mark a transfer
+# FAILED, and the rail settles it anyway. The sender has their money back, the
+# beneficiary has the payment, and nobody funded it.
+#
+# HOW TO STAGE IT
+#   1. Set PAYMENTS_SIM_FORCE_OUTCOME=late-success and restart. §90 documents
+#      every scripted outcome.
+#   2. Send a transfer (§21). It goes PENDING.
+#   3. Wait for the first status check (90s) — or force one via §90's recheck.
+#      The rail reports FAILED with `U54` (a timeout code), so we do the honest
+#      thing and mark it FAILED. The reserve goes back to the sender.
+#   4. Wait past the simulator's settle delay, then recheck again.
+#      Reconciliation now sees SUCCESS, and self-corrects — booking the payout as
+#      a RECOVERY against a RECEIVABLE, because the money genuinely left AND the
+#      sender was already refunded. Both are true and neither can be undone.
+#   5. §90's trial balance still nets to ZERO. That is the whole point: the loss
+#      is BOOKED and visible, not hidden.
+########################################################################
+
+### Force the rail's answer directly, without waiting.
+# Goes through the REAL webhook path with a REAL signature, so signature
+# verification and replay dedupe both apply — a demo that bypassed them would be
+# demonstrating a code path that does not exist in production.
+POST {{baseUrl}}/mock/upi/fire-webhook
+Content-Type: application/json
+
+{
+  "railRef": "PASTE_railRef_FROM_THE_ADMIN_DETAIL_VIEW",
+  "status": "SUCCESS",
+  "railCode": "00",
+  "kind": "payment"
+}
+
+### Send it TWICE with the same body. The second is deduped on
+# `(provider, eventId)` — a rail that retries its callback must not settle twice.
+
+### Every scripted outcome, and what each proves.
+GET {{baseUrl}}/mock/upi/script
+
+
+########################################################################
+# 90 · ADMIN — oversight and the break-glass controls
+########################################################################
+
+### THE TRIAL BALANCE. Zero in every currency, always.
+# Since every posting set is validated as balanced before it is written, a
+# non-zero result cannot come from a bad posting — it means entries reached the
+# table WITHOUT passing through the ledger service. That is the one number to
+# page somebody about.
+GET {{baseUrl}}/admin/payments/trial-balance?detailed=true
+Authorization: Bearer {{adminToken}}
+
+### Operations overview: what is stuck, what is disputed, what is in suspense.
+# The suspense figure is read from the LEDGER, not summed from transactions — the
+# ledger is what we are actually holding.
+GET {{baseUrl}}/admin/payments/stats
+Authorization: Bearer {{adminToken}}
+
+### Payments waiting on a HUMAN — DEEMED and RISK_HELD. The only states where
+# money is parked pending a decision nobody has made yet.
+GET {{baseUrl}}/admin/payments/transactions?needsAttention=true
+Authorization: Bearer {{adminToken}}
+
+### One payment, everything about it: the ledger legs, the rail events, the
+# reconciliation trail, the reversals.
+GET {{baseUrl}}/admin/payments/transactions/{{transferId}}
+Authorization: Bearer {{adminToken}}
+
+### Ask the rail again, now.
+POST {{baseUrl}}/admin/payments/transactions/{{transferId}}/recheck
+Authorization: Bearer {{adminToken}}
+
+### Force a reconciliation sweep. Reports how many late settlements it corrected.
+POST {{baseUrl}}/admin/payments/reconcile
+Authorization: Bearer {{adminToken}}
+
+### The reconciliation trail — append-only, one row per check.
+# "PENDING at 10:00, PENDING at 10:02, SUCCESS at 10:05 after we had given up" is
+# the entire story of a late-settlement incident; an upsert would leave one frame.
+GET {{baseUrl}}/admin/payments/reconciliations?status=MISMATCH
+Authorization: Bearer {{adminToken}}
+
+### Resolve a DEEMED transaction by hand. ADMIN only.
+# The two options are opposites and both irreversible: SETTLE credits the
+# beneficiary, REVERSE gives the money back. Guessing wrong pays twice or not at
+# all — which is exactly why the saga parks these instead of choosing, and why
+# this demands an evidence reference rather than only a reason.
+POST {{baseUrl}}/admin/payments/transactions/{{transferId}}/resolve-deemed
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "resolution": "SETTLE",
+  "evidenceRef": "HDFC statement line 2026-07-27 #4412",
+  "reason": "The bank statement confirms the credit reached the beneficiary.",
+  "confirmed": true
+}
+
+### Force a refund. Routed through the normal refund path, so the rail leg goes
+# first and the remaining-refundable bound applies.
+POST {{baseUrl}}/admin/payments/transactions/{{transferId}}/refund
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "amountMinor": "250000",
+  "reason": "Dispute upheld — the beneficiary confirmed non-receipt in writing.",
+  "confirmed": true
+}
+
+### Release a risk hold. Re-enters the saga at VALIDATED, not RESERVED: a hold can
+# sit for hours, and the balance or the day's limit may have moved.
+POST {{baseUrl}}/admin/payments/transactions/{{transferId}}/risk
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "decision": "RELEASE",
+  "reason": "Customer confirmed the payee by phone; device re-verified."
+}
+
+### The dispute work queue, across every user. SLA-soonest first.
+# Deliberately a superset of sla-breaches below: a queue that showed only what is already late
+# would let every dispute go late before anyone could act on it.
+GET {{baseUrl}}/admin/payments/disputes?openOnly=true&orderBy=sla&limit=50
+Authorization: Bearer {{adminToken}}
+
+### The same queue narrowed to the failures, for a lead who wants only those.
+GET {{baseUrl}}/admin/payments/disputes?breachedOnly=true
+Authorization: Bearer {{adminToken}}
+
+### Fraud claims specifically — UNAUTHORISED is a statement about the ACCOUNT, not the payment.
+GET {{baseUrl}}/admin/payments/disputes?kind=UNAUTHORISED&orderBy=created
+Authorization: Bearer {{adminToken}}
+
+### Disputes past their SLA — the queue an operations lead watches.
+GET {{baseUrl}}/admin/payments/disputes/sla-breaches
+Authorization: Bearer {{adminToken}}
+
+### The raw ledger, filterable. Every entry, append-only, per leg.
+GET {{baseUrl}}/admin/payments/ledger?accountType=SUSPENSE&limit=100
+Authorization: Bearer {{adminToken}}

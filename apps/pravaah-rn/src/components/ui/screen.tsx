@@ -32,8 +32,10 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Gutter, MaxSheetWidth, Space, usePalette } from '@/theme';
+import { useAuth } from '@/context/auth-context';
 
 import { BAR_HEIGHT } from './tab-bar';
+import { ProfileAvatar } from './profile-avatar';
 
 export interface ScreenProps {
   children: ReactNode;
@@ -51,6 +53,8 @@ export interface ScreenProps {
   contentStyle?: StyleProp<ViewStyle>;
   /** Pinned to the bottom above the inset — a primary action that must stay put. */
   footer?: ReactNode;
+  /** Show the global profile avatar at the top right. Defaults to true. */
+  showProfile?: boolean;
 }
 
 /**
@@ -68,9 +72,13 @@ export function Screen({
   bleed = false,
   contentStyle,
   footer,
+  showProfile = false,
 }: ScreenProps) {
   const p = usePalette();
   const insets = useSafeAreaInsets();
+  const { isAuthenticated } = useAuth();
+  
+  const shouldRenderProfile = showProfile && isAuthenticated;
 
   // Bottom room = the system inset, plus the tab bar when one is over this screen,
   // plus a breath so the last element is not flush against either.
@@ -84,6 +92,11 @@ export function Screen({
         contentStyle,
       ]}
     >
+      {shouldRenderProfile ? (
+        <View style={styles.profileRow}>
+          <ProfileAvatar />
+        </View>
+      ) : null}
       {children}
     </View>
   );
@@ -170,6 +183,7 @@ export function Screen({
             <View style={styles.footerInner}>{footer}</View>
           </View>
         ) : null}
+
       </KeyboardAvoidingView>
     </View>
   );
@@ -200,4 +214,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   footerInner: { width: '100%', maxWidth: MaxSheetWidth },
+  profileRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginBottom: Space.sm,
+  },
 });

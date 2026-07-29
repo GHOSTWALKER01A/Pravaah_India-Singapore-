@@ -1,4 +1,11 @@
-import { Body, Controller, HttpCode, Inject, Post, UsePipes } from '@nestjs/common'
+import {
+  Body,
+  Controller,
+  HttpCode,
+  Inject,
+  Post,
+  UsePipes,
+} from '@nestjs/common'
 
 import { APP_LOGGER, type AppLogger } from '@pravaah/nestjs-logger'
 import {
@@ -10,6 +17,7 @@ import {
   type VerifyRequest,
 } from '@pravaah/schema'
 
+import { ClientIp } from '@/common/decorators/idempotency-key.decorator'
 import { ZodValidationPipe } from '@/common/pipes/zod-validation.pipes'
 import { ResponseBuilder } from '@/utils/response-builder'
 
@@ -45,12 +53,29 @@ export class AuthController {
     return ResponseBuilder.success(data, 'OTP resent successfully')
   }
 
+  /**
+   * Verify a login OTP.
+   *
+   * ## Why the pipe is PARAM-scoped here and method-scoped on its neighbours
+   *
+   * This handler takes a second parameter (`@ClientIp()`), and method-level
+   * `@UsePipes(new ZodValidationPipe(VerifyRequestSchema))` runs the pipe against EVERY
+   * parameter — so it would validate the IP string against the body schema and 400 every
+   * login with a validation error about a missing `phone`. That exact mistake silently
+   * broke every guarded KYC POST endpoint in this codebase once already.
+   *
+   * The IP is needed because M6 counts failed logins per /24 network, which is the only
+   * way to see a botnet spraying a leaked credential dump across many identifiers — a
+   * per-identifier counter cannot distinguish that from many people forgetting passwords.
+   */
   @Post(AUTH_ROUTES.VERIFY_OTP)
   @HttpCode(200)
-  @UsePipes(new ZodValidationPipe(VerifyRequestSchema))
-  async verifyOtp(@Body() request: VerifyRequest) {
+  async verifyOtp(
+    @Body(new ZodValidationPipe(VerifyRequestSchema)) request: VerifyRequest,
+    @ClientIp() ipAddress: string | null,
+  ) {
     this.logger.info(`[${this.verifyOtp.name}] Verifying OTP`)
-    const data = await this.authService.verifyOtp(request)
+    const data = await this.authService.verifyOtp(request, { ipAddress })
     return ResponseBuilder.success(data, 'OTP verified successfully')
   }
 

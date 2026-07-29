@@ -47,6 +47,15 @@ export function useKycStatus(options?: UseKycStatusOptions): UseKycStatus {
     }
   }, []);
 
+  /**
+   * KEPT deliberately, and it must stay.
+   *
+   * `kyc/status.tsx` puts this in a `useFocusEffect(useCallback(…, [refetch]))`. React
+   * Navigation re-runs a focus effect whenever that callback's identity changes, so an
+   * unstable `refetch` means a refetch on every render while the screen is focused. The
+   * compiler's memoization is a performance optimization with no semantic guarantee, which is
+   * exactly the case React's docs name as needing the manual hook.
+   */
   const refetch = useCallback(() => load(false), [load]);
 
   useEffect(() => {

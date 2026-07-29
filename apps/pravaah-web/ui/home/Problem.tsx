@@ -90,7 +90,7 @@ export function Problem(): ReactElement {
 
         <p className="mt-12 max-w-2xl text-base leading-relaxed text-intaglio sm:text-lg">
           This happens to millions of migrant workers, students and founders
-          every year. Pravaah exists so that the record you built is yours to
+          every year. MyPravaah exists so that the record you built is yours to
           carry — not an asset stranded in a database you left behind.
         </p>
       </Container>

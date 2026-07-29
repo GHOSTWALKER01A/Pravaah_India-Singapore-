@@ -11,6 +11,7 @@ import {
 import helmet from 'helmet'
 
 import { AppModule } from '@/app.module'
+import { WELL_KNOWN_ROUTES } from '@/modules/passport/passport.route'
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule, {
@@ -28,7 +29,14 @@ async function bootstrap(): Promise<void> {
   app.use(helmet())
   app.enableCors({ credentials: true })
 
-  app.setGlobalPrefix('api')
+  // The M3 trust-anchor documents must NOT be prefixed. `did:web:pravaah.app`
+  // resolves, by specification, to `https://pravaah.app/.well-known/did.json` — there
+  // is no room in a DID for an `/api` segment. Served under the prefix, our DID
+  // document would be unreachable by every conformant resolver, quietly reducing the
+  // passport to something only Pravaah can verify and removing the whole point of M3.
+  app.setGlobalPrefix('api', {
+    exclude: Object.values(WELL_KNOWN_ROUTES).map((path) => `/${path}`),
+  })
   app.enableVersioning({
     type: VersioningType.URI,
     defaultVersion: '1',

@@ -1,6 +1,7 @@
+import Link from "next/link";
 import type { ReactElement } from "react";
 
-import { buildOpenAppHref } from "@/lib/config/site";
+import { STAGE, buildOpenAppHref } from "@/lib/config/site";
 import { ROUTES } from "@/lib/constants/routes";
 import { Container } from "@/ui/layout/Container";
 import { Guilloche } from "@/ui/engraving/Guilloche";
@@ -14,7 +15,7 @@ import { Legend } from "@/ui/primitives/Legend";
  */
 export function Close(): ReactElement {
   return (
-    <section className="relative overflow-hidden bg-intaglio-deep py-24 text-reverse sm:py-32">
+    <section className="relative overflow-clip bg-intaglio-deep py-24 text-reverse sm:py-32">
       <Guilloche
         seed={3}
         bands={6}
@@ -42,14 +43,23 @@ export function Close(): ReactElement {
               href={buildOpenAppHref({ source: "close" })}
               variant="quiet"
             >
-              Get the app
+              App availability
             </ButtonLink>
           </div>
 
-          <p className="mt-6 max-w-md text-sm leading-relaxed text-reverse-dim">
-            The app is not released yet. Identity verification and consented
-            data collection work end to end today; the score and the issued
-            passport are still being built.
+          {/* The last thing on the page is the limitation, not the pitch. A
+              close that repeats the claim it opened with has told the reader
+              nothing; this one tells them the thing they would otherwise find
+              out from somebody else. */}
+          <p className="mt-8 max-w-xl text-sm leading-relaxed text-reverse-dim">
+            {STAGE.headline}{" "}
+            <Link
+              href={ROUTES.WHAT_IS_BUILT}
+              className="text-latent underline decoration-latent/40 underline-offset-4 transition-colors duration-200 hover:decoration-latent"
+            >
+              Everything that is built, and everything that is not, is set out
+              in full.
+            </Link>
           </p>
         </div>
       </Container>

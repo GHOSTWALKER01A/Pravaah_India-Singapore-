@@ -5,11 +5,11 @@ import { BASE_URL, SITE_CONFIG } from "@/lib/config/site";
 export const ROOT_METADATA: Metadata = {
   metadataBase: new URL(BASE_URL),
   title: {
-    template: "%s · Pravaah",
-    default: "Pravaah — a financial reputation that crosses the border with you",
+    template: "%s · MyPravaah",
+    default: "MyPravaah — a financial reputation that crosses the border with you",
   },
   description:
-    "Pravaah turns the financial history you built in one country into a signed credential you own and can present in another. Consent-based, explainable, and deletable at any moment.",
+    "MyPravaah turns the financial history you built in one country into a signed credential you own and can present in another. Consent-based, explainable, and deletable at any moment.",
   applicationName: SITE_CONFIG.name,
   keywords: [
     "financial reputation passport",
@@ -41,15 +41,15 @@ export const ROOT_METADATA: Metadata = {
     siteName: SITE_CONFIG.name,
     url: BASE_URL,
     locale: "en_IN",
-    title: "Pravaah — a financial reputation that crosses the border with you",
+    title: "MyPravaah — a financial reputation that crosses the border with you",
     description:
-      "Your credit history dies at the airport. Pravaah turns it into a credential you own and can present anywhere.",
+      "Your credit history dies at the airport. MyPravaah turns it into a credential you own and can present anywhere.",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Pravaah — a financial reputation that crosses the border with you",
+    title: "MyPravaah — a financial reputation that crosses the border with you",
     description:
-      "Your credit history dies at the airport. Pravaah turns it into a credential you own and can present anywhere.",
+      "Your credit history dies at the airport. MyPravaah turns it into a credential you own and can present anywhere.",
   },
   formatDetection: { telephone: false, address: false, email: false },
 };
@@ -71,8 +71,8 @@ export function pageMetadata(options: {
     title,
     description,
     alternates: { canonical: path },
-    openGraph: { title: `${title} · Pravaah`, description, url: `${BASE_URL}${path}` },
-    twitter: { title: `${title} · Pravaah`, description },
+    openGraph: { title: `${title} · MyPravaah`, description, url: `${BASE_URL}${path}` },
+    twitter: { title: `${title} · MyPravaah`, description },
     ...(noIndex ? { robots: { index: false, follow: true } } : {}),
   };
 }

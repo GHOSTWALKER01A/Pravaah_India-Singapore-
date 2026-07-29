@@ -33,6 +33,22 @@
     "./scoring": {
       "types": "./dist/scoring/index.d.cts",
       "default": "./dist/scoring/index.cjs"
+    },
+    "./passport": {
+      "types": "./dist/passport/index.d.cts",
+      "default": "./dist/passport/index.cjs"
+    },
+    "./payments": {
+      "types": "./dist/payments/index.d.cts",
+      "default": "./dist/payments/index.cjs"
+    },
+    "./insurance": {
+      "types": "./dist/insurance/index.d.cts",
+      "default": "./dist/insurance/index.cjs"
+    },
+    "./fraud": {
+      "types": "./dist/fraud/index.d.cts",
+      "default": "./dist/fraud/index.cjs"
     }
   },
   "scripts": {

@@ -1,9 +1,12 @@
 import type { ReactElement } from "react";
 
+import { STAGE } from "@/lib/config/site";
+import { ROUTES } from "@/lib/constants/routes";
 import { CHAIN, DOWNSTREAM } from "@/lib/content/chain";
+import { ButtonLink } from "@/ui/primitives/Button";
 import { Container } from "@/ui/layout/Container";
 import { Legend } from "@/ui/primitives/Legend";
-import { StatusMark } from "@/ui/primitives/StatusMark";
+import { RailMark, StatusMark } from "@/ui/primitives/StatusMark";
 
 /**
  * The chain of trust.
@@ -13,8 +16,12 @@ import { StatusMark } from "@/ui/primitives/StatusMark";
  * whole architecture, so it is stated in the link between rows rather than
  * left for the reader to infer.
  *
- * Every roadmap module is marked as roadmap — PRODUCT.md requires it, and for
- * this audience the honesty is itself the argument.
+ * Every row now reads "Built · verified", and the uniformity is the argument
+ * rather than a formatting accident — a reader arriving at a page like this
+ * expects most of it to be roadmap. What still varies is whether the regulated
+ * rail behind a link is the real one, so that is marked separately and the
+ * limitation is printed in full underneath. Marking the two on one axis would
+ * be the dishonest shortcut available here.
  */
 export function Chain(): ReactElement {
   return (
@@ -28,11 +35,12 @@ export function Chain(): ReactElement {
             Each link is impossible without the one above it.
           </h2>
           <p className="mt-7 text-base leading-relaxed text-intaglio sm:text-lg">
-            This is why Pravaah is built in order rather than as a set of
+            This is why MyPravaah is built in order rather than as a set of
             features. An unverified identity cannot produce consented data; data
             nobody consented to cannot produce a score; a score with no data
-            behind it cannot be sealed into anything worth presenting. Two links
-            are in service today.
+            behind it cannot be sealed into anything worth presenting. All of it
+            is built — and the point of the order is that no link can be
+            skipped, not that some are still missing.
           </p>
         </div>
 
@@ -40,7 +48,7 @@ export function Chain(): ReactElement {
           {CHAIN.map((link, index) => (
             <li
               key={link.id}
-              className="relative grid gap-y-4 border-t border-intaglio/20 py-8 sm:grid-cols-[7rem_minmax(0,1fr)] sm:gap-x-8 sm:py-10 lg:grid-cols-[7rem_minmax(0,22rem)_minmax(0,1fr)] lg:gap-x-12"
+              className="relative grid gap-y-5 border-t border-intaglio/20 py-8 sm:grid-cols-[7rem_minmax(0,1fr)] sm:gap-x-8 sm:py-10 lg:grid-cols-[7rem_minmax(0,20rem)_minmax(0,1fr)] lg:gap-x-12"
             >
               <div className="flex items-baseline gap-3 sm:flex-col sm:gap-2">
                 <span className="field-value text-sm text-carmine">
@@ -66,12 +74,35 @@ export function Chain(): ReactElement {
                 <p className="mt-2.5 text-[0.9375rem] leading-relaxed text-carmine">
                   {link.claim}
                 </p>
-                <StatusMark status={link.status} className="mt-4" />
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <StatusMark status={link.status} />
+                  <RailMark rail={link.rail} />
+                </div>
               </div>
 
-              <p className="max-w-2xl text-[0.9375rem] leading-relaxed text-ink sm:text-base">
-                {link.detail}
-              </p>
+              <div className="max-w-2xl">
+                <p className="text-[0.9375rem] leading-relaxed text-ink sm:text-base">
+                  {link.detail}
+                </p>
+
+                {/* What the holder does. Kept as a distinct field rather than
+                    folded into the paragraph above: the mechanism and the
+                    experience answer different questions, and a reader
+                    scanning for "what will this ask of me" should not have to
+                    read an architecture note to find it. */}
+                <p className="mt-4 border-l border-intaglio/25 pl-4 text-[0.9375rem] leading-relaxed text-intaglio">
+                  <span className="legend mb-1 block text-intaglio-mid">
+                    What you do
+                  </span>
+                  {link.holder}
+                </p>
+
+                {link.caveat ? (
+                  <p className="mt-4 text-sm leading-relaxed text-carmine-deep">
+                    {link.caveat}
+                  </p>
+                ) : null}
+              </div>
             </li>
           ))}
         </ol>
@@ -82,17 +113,18 @@ export function Chain(): ReactElement {
         <div className="mt-20 border-t-2 border-intaglio pt-14 sm:mt-24">
           <div className="max-w-3xl">
             <Legend className="text-intaglio-mid">
-              Downstream · once the passport exists
+              Downstream · what the passport is worth
             </Legend>
             <p className="mt-6 text-base leading-relaxed text-intaglio sm:text-lg">
-              Sending money across the corridor is genuinely useful — and it is
-              one module of eight, worth something only because of the trust
-              built above it. Without the passport it is just another payments
-              app.
+              Sending money across the corridor, buying cover priced on your
+              record, and being protected from someone impersonating you are all
+              genuinely useful. Each is one module of eight, and each is worth
+              something only because of the trust built above it. Without the
+              passport, they are another payments app.
             </p>
           </div>
 
-          <dl className="mt-12 grid gap-x-12 gap-y-10 sm:grid-cols-3">
+          <dl className="mt-12 grid gap-x-12 gap-y-12 sm:grid-cols-3">
             {DOWNSTREAM.map((item) => (
               <div key={item.id}>
                 <dt>
@@ -110,11 +142,40 @@ export function Chain(): ReactElement {
                   <p className="mt-3 text-sm leading-relaxed text-ink">
                     {item.detail}
                   </p>
-                  <StatusMark status={item.status} className="mt-4" />
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <StatusMark status={item.status} />
+                    <RailMark rail={item.rail} />
+                  </div>
+                  {item.caveat ? (
+                    <p className="mt-3 text-sm leading-relaxed text-carmine-deep">
+                      {item.caveat}
+                    </p>
+                  ) : null}
                 </dd>
               </div>
             ))}
           </dl>
+        </div>
+
+        {/* The stage, stated once, where the reader has just been told eight
+            things are built and is entitled to be sceptical. */}
+        <div className="mt-20 border border-carmine/30 bg-carmine/5 p-7 sm:mt-24 sm:p-10 notch-lg">
+          <Legend className="text-carmine">
+            Before you read any of that as an offer
+          </Legend>
+          <p className="mt-5 max-w-3xl text-base leading-relaxed text-ink sm:text-lg">
+            {STAGE.pending}
+          </p>
+          <p className="mt-4 max-w-3xl text-[0.9375rem] leading-relaxed text-intaglio">
+            {STAGE.release}
+          </p>
+          <ButtonLink
+            href={ROUTES.WHAT_IS_BUILT}
+            variant="secondary"
+            className="mt-8"
+          >
+            See exactly what is built
+          </ButtonLink>
         </div>
       </Container>
     </section>

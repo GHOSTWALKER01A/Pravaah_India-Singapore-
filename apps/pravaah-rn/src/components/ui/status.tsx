@@ -55,6 +55,18 @@ export const STATUS_META: Record<
   REVOKED: { label: 'Revoked', tone: 'carmine' },
   COMPLETED: { label: 'Complete', tone: 'field' },
   PARTIAL: { label: 'Partial', tone: 'latent' },
+
+  /**
+   * M6 device lifecycle. `ACTIVE` and `REVOKED` are already above and mean the same thing
+   * for a device as for a consent, so only the two new states are added here.
+   *
+   * They are added rather than left to `statusMeta`'s fallback because that fallback renders
+   * the RAW TOKEN — a user would have read the words "SUSPECTED_SWAP" on their own device
+   * list, which is both meaningless and alarming. The fallback exists so an unknown status
+   * degrades instead of crashing, not as a licence to skip the copy.
+   */
+  BINDING: { label: 'Not finished', tone: 'neutral' },
+  SUSPECTED_SWAP: { label: 'Needs verifying', tone: 'latent' },
 };
 
 export function statusMeta(status: string) {

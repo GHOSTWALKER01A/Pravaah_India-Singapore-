@@ -17,7 +17,7 @@
  * Everything honours Reduce Motion by skipping the scale and keeping the ink,
  * which means feedback survives even when animation does not.
  */
-import { type ReactNode, useCallback } from 'react';
+import { type ReactNode } from 'react';
 import {
   Platform,
   Pressable,
@@ -77,13 +77,10 @@ export function Press({
 
   const overlay = useAnimatedStyle(() => ({ opacity: held.value }));
 
-  const handlePress = useCallback<NonNullable<PressableProps['onPress']>>(
-    (event) => {
-      if (feedback !== 'none') haptic[feedback]();
-      onPress?.(event);
-    },
-    [feedback, onPress],
-  );
+  const handlePress: NonNullable<PressableProps['onPress']> = (event) => {
+    if (feedback !== 'none') haptic[feedback]();
+    onPress?.(event);
+  };
 
   return (
     <Animated.View style={[animated, style]}>

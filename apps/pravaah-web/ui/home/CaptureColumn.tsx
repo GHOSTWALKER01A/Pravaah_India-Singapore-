@@ -14,7 +14,8 @@ import { Legend } from "@/ui/primitives/Legend";
  * Scattered institutions at the top, combed through the consent gate in the
  * middle, arriving as one sealed stream at the base. The security thread runs
  * the full height and draws downward on scroll: the page's single authored
- * motion. Pravaah means flow, and the scroll is that flow.
+ * motion — the descent IS the flow the name comes from, which is why the
+ * section is a column rather than a row of steps.
  *
  * The Account Aggregator is the product's real differentiator, so it is taught
  * in three words rather than abstracted away.
@@ -34,7 +35,15 @@ export function CaptureColumn(): ReactElement {
   return (
     <section
       id="how-it-works"
-      className="relative overflow-hidden bg-intaglio py-20 text-reverse sm:py-28"
+      // `clip`, never `overflow: hidden`. `hidden` makes this section a scroll
+      // container, and the security thread's `animation-timeline: view()`
+      // resolves against its nearest scroll-container ancestor — so it was
+      // being driven by this section, a box that never scrolls, and the page's
+      // one authored motion was not running at all. `clip` clips the bled
+      // rosette without creating a scroll box, leaving the viewport in charge.
+      // (Spelling the class name out in a comment would also make Tailwind
+      // emit the utility, which is how the dead rule got into the stylesheet.)
+      className="relative overflow-clip bg-intaglio py-20 text-reverse sm:py-28"
     >
       <Container>
         <div className="max-w-3xl">
@@ -112,7 +121,7 @@ export function CaptureColumn(): ReactElement {
             <ColumnStage
               stage="The gate"
               title="Nothing moves until you say so"
-              body="Pravaah submits a request naming the data, the purpose, the period it covers, and how long we may keep it. You see that request in plain language on the aggregator's own screen — not ours — and you approve it or you refuse it."
+              body="MyPravaah submits a request naming the data, the purpose, the period it covers, and how long we may keep it. You see that request in plain language on the aggregator's own screen — not ours — and you approve it or you refuse it."
               emphasis
             >
               <div className="relative mt-8 border border-latent-line/40 bg-intaglio-deep/60 p-7 sm:p-9 notch-lg">

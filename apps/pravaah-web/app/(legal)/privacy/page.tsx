@@ -10,7 +10,7 @@ import { DocumentShell, ReplaceBeforeLaunch } from "@/ui/layout/DocumentShell";
 export const metadata: Metadata = pageMetadata({
   title: "Privacy",
   description:
-    "What Pravaah collects, why, how long it is kept, who it is shared with, and exactly how you revoke consent and have your data deleted.",
+    "What MyPravaah collects, why, how long it is kept, who it is shared with, and exactly how you revoke consent and have your data deleted.",
   path: ROUTES.LEGAL.PRIVACY,
 });
 
@@ -60,6 +60,11 @@ export default function PrivacyPage(): ReactElement {
         <li>
           <strong>You can revoke consent at any time and the data is deleted
           immediately.</strong>
+        </li>
+        <li>
+          Your credential is issued to you and held on your device. We do not
+          push it anywhere, and we do not run a directory an institution can
+          query about you.
         </li>
         <li>We do not sell your data. There is no advertising business here.</li>
       </ul>
@@ -116,6 +121,72 @@ export default function PrivacyPage(): ReactElement {
         you approve anything.
       </p>
 
+      <h3>Your score, and the reasons behind it</h3>
+      <p>
+        Your financial data is normalised into features &mdash; income
+        steadiness, average balance, obligation history and similar &mdash; and a
+        score is computed from them. We retain the score, the model version that
+        produced it, the confidence and coverage figures, and the ranked reasons,
+        because a score without its reasons is not something we are willing to
+        serve you. Previous scores are kept so you can see your own history.
+      </p>
+
+      <h3>Protected attributes &mdash; only if you offer them</h3>
+      <p>
+        We cannot check whether the model treats people unfairly without knowing
+        who was affected, and holding that information is itself a risk. So it is
+        a <strong>separate, optional consent</strong>, never bundled into the
+        main one: gender, an age band, and nationality, used only for bias
+        auditing and never as an input to your score. The values are not readable
+        back out &mdash; the app can learn which attributes are held, never what
+        they say. Declining changes nothing about your score or your eligibility.
+      </p>
+
+      <h3>Your credential, and who you showed it to</h3>
+      <p>
+        When your passport is issued, a signing key is generated on your own
+        device and never leaves it; we receive only its public half. We retain the
+        credential record, its validity window, its revocation status, and a log
+        of every presentation &mdash; who checked it, when, whether the check
+        passed, and which claims you disclosed. That log exists for you: it is the
+        only way to know afterwards what left your wallet.
+      </p>
+
+      <h3>Payments</h3>
+      <p>
+        If you send money we hold the transaction, the amount, the currency, the
+        purpose you selected, the beneficiary details you entered, the exchange
+        rate you were quoted, and the ledger entries recording what happened to
+        your balance. Financial regulation requires payment records to be
+        retained, so these are not deleted on request &mdash; a ledger you can
+        erase is not a ledger, and it is also the document that answers you when a
+        balance is disputed.
+      </p>
+
+      <h3>Insurance</h3>
+      <p>
+        If you request a quote we hold the underwriting inputs and the outcome,
+        including the reason for a higher rate or a decline. If you file a claim
+        we hold the claim, the documents you upload, and the decision with its
+        reasoning.
+      </p>
+
+      <h3>Your devices, and security decisions</h3>
+      <p>
+        We record the devices you use, whether each reported an operating-system
+        integrity problem such as being rooted, and when each was last seen. We
+        also record every risk decision made about an action of yours &mdash;
+        including the ones that let you through &mdash; so that you can read them.
+        Where a signal involves an identifier such as a payment address or a
+        mobile number, it is stored keyed and irreversible rather than in the
+        clear.
+      </p>
+      <p>
+        Confirming whether a SIM has recently been re-issued requires asking a
+        mobile network. We ask about the number you gave us, and we receive only
+        whether a re-issue occurred and when.
+      </p>
+
       <h3>What we do not collect</h3>
       <ul>
         <li>
@@ -123,8 +194,17 @@ export default function PrivacyPage(): ReactElement {
           There is no field for them anywhere in the product. Anyone asking you
           for these on our behalf is not us.
         </li>
+        <li>
+          <strong>Your UPI PIN.</strong> It is entered in your bank&rsquo;s own
+          secure component and never reaches us. Where the app asks for a PIN of
+          its own, it says so in the same sentence.
+        </li>
         <li>Your contacts, photo library, SMS messages, or call logs.</li>
         <li>Data outside the scope of a consent you granted.</li>
+        <li>
+          Protected attributes, unless you separately and explicitly offer them
+          for bias auditing.
+        </li>
       </ul>
 
       <h2>How financial data reaches us</h2>
@@ -138,7 +218,7 @@ export default function PrivacyPage(): ReactElement {
           Your bank, which holds the data (the Financial Information Provider).
         </li>
         <li>
-          Pravaah, which requests it (the Financial Information User).
+          MyPravaah, which requests it (the Financial Information User).
         </li>
         <li>
           A licensed Account Aggregator, which brokers your permission and
@@ -168,6 +248,23 @@ export default function PrivacyPage(): ReactElement {
           immediately.
         </strong>{" "}
         Revocation is available to you at any time and does not require a reason.
+        A score computed from data that has been deleted expires with it, and the
+        product will tell you that it has rather than continuing to show a figure
+        it can no longer justify.
+      </p>
+      <p>
+        Two categories are deliberately outside that: <strong>payment and
+        ledger records</strong>, which financial regulation requires us to retain,
+        and <strong>identity verification outcomes</strong>, for the same reason.
+        If you ask us to delete everything, we will tell you specifically which
+        records we are keeping and under what obligation, rather than refusing in
+        general terms.
+      </p>
+      <p>
+        Revoking your <strong>passport</strong> is separate from revoking a
+        consent, and stronger in one respect: it stops verifying for everyone,
+        everywhere, immediately &mdash; including for anyone already holding a
+        copy of it. The device key it was bound to is destroyed at the same time.
       </p>
 
       <h2>Who we share it with</h2>
@@ -183,8 +280,24 @@ export default function PrivacyPage(): ReactElement {
         </li>
         <li>
           <strong>Institutions you choose to present a credential to.</strong>{" "}
-          They receive the credential you present — not the underlying financial
-          data behind it.
+          They receive only the claims you ticked — not the underlying financial
+          data behind them, and not the claims you withheld. What you withhold is
+          reported to them as withheld rather than as a negative answer.
+        </li>
+        <li>
+          <strong>Payment rails and their operators</strong>, when you send money.
+          They receive what a transfer requires: the amount, the beneficiary
+          details, and the purpose code the corridor demands.
+        </li>
+        <li>
+          <strong>An insurance risk carrier</strong>, if and when one is on paper,
+          for cover you have asked for. There is none today, which is why no
+          policy is currently in force.
+        </li>
+        <li>
+          <strong>A mobile network</strong>, to ask whether the SIM behind your
+          number has recently been re-issued. We send the number and receive only
+          that answer.
         </li>
         <li>
           <strong>Regulators, courts and law enforcement</strong>, where we are
@@ -202,6 +315,22 @@ export default function PrivacyPage(): ReactElement {
       <ul>
         <li>See what consents are active and exactly what each one covers.</li>
         <li>Revoke any consent, which deletes the data collected under it.</li>
+        <li>
+          See every disclosure of your credential — who checked it, when, and
+          which claims they received.
+        </li>
+        <li>
+          Revoke the credential itself, which stops it verifying for everyone at
+          once.
+        </li>
+        <li>
+          See every security decision recorded about you, including the ones that
+          allowed an action.
+        </li>
+        <li>
+          Withdraw the optional protected-attribute consent, which deletes those
+          attributes.
+        </li>
         <li>Ask for a copy of the personal data we hold about you.</li>
         <li>Ask us to correct data that is wrong.</li>
         <li>
@@ -216,7 +345,7 @@ export default function PrivacyPage(): ReactElement {
 
       <h2>Cross-border transfer</h2>
       <p>
-        Pravaah operates across the India&ndash;Singapore corridor, so data may
+        MyPravaah operates across the India&ndash;Singapore corridor, so data may
         be processed in either jurisdiction. Where data crosses a border, it does
         so under the protections required by the law of the jurisdiction it came
         from.
@@ -224,17 +353,49 @@ export default function PrivacyPage(): ReactElement {
 
       <h2>Automated decisions</h2>
       <p>
-        Verification checks are automated, but a partial name mismatch is routed
-        to a human reviewer rather than auto-rejected — names transliterate badly
-        between scripts and legitimately vary between documents, and treating
-        that as fraud would penalise exactly the people this product exists for.
-        Scoring is not live yet; when it is, the score will arrive with the
-        reasons behind it attached, and you will be told what they are.
+        Several things here are decided by software, and you are entitled to know
+        which, and what recourse each one has.
       </p>
+      <ul>
+        <li>
+          <strong>Verification checks are automated</strong>, but a partial name
+          mismatch is routed to a human reviewer rather than auto-rejected — names
+          transliterate badly between scripts and legitimately vary between
+          documents, and treating that as fraud would penalise exactly the people
+          this product exists for.
+        </li>
+        <li>
+          <strong>Your score is computed by a model</strong>, and it is never
+          served without its reasons. You are shown the factors driving it, ranked,
+          and the specific changes that would raise it. If the data is too thin to
+          say anything useful, you are told that instead of being given a number.
+          The model version that produced any given score is recorded, so a score
+          can always be traced to the thing that made it.
+        </li>
+        <li>
+          <strong>Insurance pricing is automated.</strong> A higher rate arrives
+          with the reason and with what would change it. A decline arrives as an
+          explained outcome rather than an error.
+        </li>
+        <li>
+          <strong>Risk decisions can delay an action</strong> — a payment, a
+          claim, a sign-in, registering a device. Where that happens you may be
+          asked to confirm it is you, or the action may be held for a person to
+          look at. A hold is a delay and not an accusation: at any threshold worth
+          setting, most held actions belong to people who have done nothing wrong,
+          which is precisely why it is a delay.
+        </li>
+        <li>
+          <strong>A human decides the consequential ones.</strong> Releasing a
+          held payment, adjudicating a claim, and resolving a fraud case are all
+          decisions a person makes. You can ask us to explain any of them and to
+          reconsider.
+        </li>
+      </ul>
 
       <h2>Children</h2>
       <p>
-        Pravaah is not for anyone under 18. We do not knowingly collect data
+        MyPravaah is not for anyone under 18. We do not knowingly collect data
         from minors, and we delete it if we discover we have.
       </p>
 

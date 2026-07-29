@@ -123,6 +123,144 @@ export const ENV = {
       FIU_ID: 'FINVU_FIU_ID',
     },
   },
+  // M3 — The Passport (Verifiable Credential layer). These two values ARE the
+  // credential's identity, not tuning knobs: ISSUER_DOMAIN is baked into every
+  // SD-JWT as `did:web:<domain>` and is what a foreign verifier resolves to find
+  // our public keys. Changing it invalidates every credential already issued.
+  // See src/modules/passport/passport.config.ts.
+  PASSPORT: {
+    // Bare host, no scheme, no port (a colon in a did:web is a path separator).
+    // Defaults to API_PUBLIC_URL's hostname, then to "pravaah.app".
+    ISSUER_DOMAIN: 'PASSPORT_ISSUER_DOMAIN',
+    // Where verifiers FETCH from (JWKS, status lists, card links). May differ
+    // from ISSUER_DOMAIN during a demo — e.g. an ngrok tunnel.
+    PUBLIC_URL: 'PASSPORT_PUBLIC_URL',
+    // Credential validity ceiling in days. The real expiry is min(this, the
+    // consent's data life), so this only ever shortens a credential's life.
+    MAX_VALIDITY_DAYS: 'PASSPORT_MAX_VALIDITY_DAYS',
+  },
+  // M4 — Cross-border money movement (UPI ↔ PayNow · ledger · idempotency).
+  // Non-secret policy literals (caps, fees, poll schedules) live in
+  // src/modules/payments/payments.config.ts, NOT here: a daily limit is not
+  // configuration, it is what the platform is permitted to do, and it should not
+  // be changeable by editing an env file on a server.
+  PAYMENTS: {
+    // Domestic UPI provider: 'sim' (default — the full-fidelity simulator) |
+    // 'decentro' (live sandbox). The cross-border leg has no live option: the
+    // UPI↔PayNow linkage is a BANK rail (DBS Singapore / Liquid Group), not an
+    // API anyone can sign up for, so it is always simulated and the production
+    // path is a PSP/bank partnership.
+    UPI_PROVIDER: 'PAYMENTS_UPI_PROVIDER',
+    // Our PSP handle suffix — the `@pravaah` in `ravi@pravaah`.
+    VPA_SUFFIX: 'PAYMENTS_VPA_SUFFIX',
+    // HMAC key for dynamic (amount-bearing) QR codes. A dynamic QR IS a payment
+    // instruction, so an unsigned one can be edited in transit. Falls back to
+    // FIELD_ENCRYPTION_KEY so a dev environment is never silently unsigned.
+    QR_SIGNING_SECRET: 'PAYMENTS_QR_SIGNING_SECRET',
+    // Live FX mid-rates. When absent, FALLBACK_MID_RATES in payments.config.ts
+    // is used and every quote is stamped `rateSource: "static"` — an honest
+    // label, so a receipt never implies a market rate we did not fetch.
+    FX_API_URL: 'PAYMENTS_FX_API_URL',
+    FX_API_KEY: 'PAYMENTS_FX_API_KEY',
+    // Per-provider webhook signing secrets, resolved as
+    // `PAYMENTS_WEBHOOK_SECRET_<PROVIDER>` (upper-cased).
+    WEBHOOK_SECRET_PREFIX: 'PAYMENTS_WEBHOOK_SECRET_',
+    // Simulator behaviour. These exist so the NASTY cases are demonstrable on
+    // demand rather than only in production: a forced failure, a slow
+    // settlement, and the money-losing "late SUCCESS after we timed out".
+    SIM: {
+      // Percent (0–100) of submissions the rail rejects outright.
+      FAIL_PERCENT: 'PAYMENTS_SIM_FAIL_PERCENT',
+      // Percent that never answer at all — these become DEEMED.
+      TIMEOUT_PERCENT: 'PAYMENTS_SIM_TIMEOUT_PERCENT',
+      // Milliseconds a PENDING transfer takes to settle.
+      SETTLE_DELAY_MS: 'PAYMENTS_SIM_SETTLE_DELAY_MS',
+      // Force the next submission down a specific path, for a scripted demo:
+      // 'success' | 'pending' | 'fail' | 'timeout' | 'late-success'.
+      FORCE_OUTCOME: 'PAYMENTS_SIM_FORCE_OUTCOME',
+    },
+  },
+  // M5 — Micro-insurance (usage-based cover · reputation-priced · claims).
+  // The UNDERWRITING literals — band multipliers, the confidence gate, waiting
+  // periods, the auto-approve ceiling, the tamper threshold — are deliberately
+  // NOT here. They live in src/modules/insurance/insurance.config.ts, because a
+  // pricing multiplier is not configuration: it decides what a policyholder
+  // pays, and it must not be changeable by editing an env file on a server. What
+  // remains here is credentials and provider selection.
+  INSURANCE: {
+    // Which insurer carries the risk: 'mock' (default — the demonstration
+    // insurer) | 'acko' | 'digit'. Any non-mock value is REFUSED at startup
+    // until a real InsurerProvider exists, rather than silently downgraded —
+    // an operator who selected a live insurer and got mock policy references
+    // would discover it when a policyholder claimed.
+    MODE: 'INSURER_MODE',
+    // HMAC secret for verifying insurer status callbacks. Signed over the RAW
+    // request body. Falls back to a development value with a loud warning, so
+    // the signed-webhook path is always exercised.
+    WEBHOOK_SECRET: 'INSURER_WEBHOOK_SECRET',
+    // Document extraction: 'dev' (default — deterministic, CI-safe, and the way
+    // the forged-document demo is triggered) | 'gvision' | 'textract'.
+    OCR_MODE: 'OCR_MODE',
+    GOOGLE_VISION_KEY: 'GOOGLE_VISION_KEY',
+    AWS_TEXTRACT_REGION: 'AWS_TEXTRACT_REGION',
+    // HCX (Health Claims Exchange) — ROADMAP. Unset by default, and that is what
+    // makes MockHcxProvider report itself unconfigured: the health-claim
+    // exchange leg is then SKIPPED visibly rather than answering with a
+    // fabricated request id on a real claim. Joining HCX needs participant
+    // onboarding and a registered JWS key, neither of which is code.
+    HCX: {
+      BASE_URL: 'HCX_BASE_URL',
+      PARTICIPANT_CODE: 'HCX_PARTICIPANT_CODE',
+      PRIVATE_KEY: 'HCX_PRIVATE_KEY',
+    },
+    // ABDM / ABHA health identity — ROADMAP. `Policy.abhaRef` is a column so the
+    // linkage is designed in; nothing in the build depends on it.
+    ABDM: {
+      CLIENT_ID: 'ABDM_CLIENT_ID',
+      CLIENT_SECRET: 'ABDM_CLIENT_SECRET',
+    },
+  },
+  // M6 — Fraud & Risk (the cross-cutting shield).
+  //
+  // The RISK literals — signal weights, decision thresholds, velocity caps,
+  // cooling-off windows — are deliberately NOT here. They live in
+  // src/modules/fraud/fraud.config.ts, because a fraud threshold is not
+  // configuration: it decides whose money gets stopped, and it must not be
+  // changeable by editing an env file on a server. Same rule M4 applies to
+  // payment limits and M5 to pricing multipliers. What remains here is secrets,
+  // provider selection, and the demo triggers.
+  FRAUD: {
+    // Keyed-hash secret for every cross-user identifier M6 stores (the mule
+    // graph's edges, watchlist entries, login-attempt identifiers). Falls back
+    // to FIELD_ENCRYPTION_KEY so no environment is ever accidentally unsalted,
+    // but it deserves its own value: rotating this key orphans every EntityLink
+    // and ListEntry ever written, because the new hash of a listed VPA will not
+    // match the old one and a sanctions list silently stops matching. Rotating
+    // it is a data migration, not a config change. See risk-hash.util.ts.
+    HASH_KEY: 'RISK_HASH_KEY',
+    // Which telco answers SIM-swap questions: 'dev' (default — deterministic and
+    // CI-safe) | a carrier/aggregator name. Any non-dev value is REFUSED at
+    // startup until a real TelcoProvider exists, rather than silently
+    // downgraded: an operator who selected a live carrier and got the dev stub
+    // would believe SIM-swap detection was corroborated when it was not.
+    TELCO_MODE: 'TELCO_MODE',
+    // HMAC secret for verifying telco SIM-change callbacks, signed over the RAW
+    // request body. A callback that can flip a device into SUSPECTED_SWAP is an
+    // authenticated endpoint by any reasonable reading — an unauthenticated one
+    // lets anybody freeze anybody's payments.
+    TELCO_WEBHOOK_SECRET: 'TELCO_WEBHOOK_SECRET',
+    // DEMO TRIGGER: set to a device's stored simSerialHash (or the literal '*')
+    // and DevTelcoProvider reports a SIM re-issue, driving the full
+    // SUSPECTED_SWAP → cooling-off → step-up path live. Exists so the nastiest
+    // case in the module is demonstrable on demand rather than only in
+    // production — the same reasoning as PAYMENTS_SIM_FORCE_OUTCOME.
+    SIM_SWAP_HASH: 'FRAUD_SIM_SWAP_HASH',
+    // DEV-ONLY: echo generated step-up OTPs in the issue response. Lets the
+    // step-up path be exercised without an SMS channel. Refused when
+    // NODE_ENV=production, because an API that returns its own OTP is not a
+    // second factor at all.
+    ECHO_STEP_UP_OTP: 'FRAUD_ECHO_STEP_UP_OTP',
+  },
   // Singpass Myinfo v4 (Singapore KYC rail — production/UAT). Only wired when
   // RealSingpassProvider replaces the persona provider. See
   // src/config/singpass.config.ts for non-secret literals (endpoints/scopes).

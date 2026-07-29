@@ -64,7 +64,7 @@ export function AppHandoff({
       <Legend className="text-latent">Handing you over</Legend>
 
       <p className="mt-5 text-base leading-relaxed text-reverse-dim">
-        If Pravaah is installed, it should be opening now. If it isn&rsquo;t
+        If MyPravaah is installed, it should be opening now. If it isn&rsquo;t
         installed we will send you to the store in a moment — or go straight
         there yourself.
       </p>

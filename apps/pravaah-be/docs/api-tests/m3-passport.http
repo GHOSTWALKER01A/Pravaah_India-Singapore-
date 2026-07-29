@@ -1,0 +1,595 @@
+########################################################################
+# PRAVAAH · M3 — The Passport (Verifiable Credential layer)
+#
+# VS Code "REST Client" / JetBrains HTTP client.  Base = /api/v1/...
+#
+# M2 produced a score that lives in OUR database. M3 issues it to the user as
+# an SD-JWT VC they OWN: signed, tamper-evident, selectively disclosable,
+# revocable, and verifiable offline by anyone in either country.
+#
+# ─── THE ONE THING THAT CANNOT BE DONE FROM THIS FILE ─────────────────────
+#
+# Presenting a credential requires a Key Binding JWT signed by the HOLDER'S
+# DEVICE KEY. That key is generated on the phone, lives in the Keychain /
+# Keystore, and never reaches the server — which is precisely why a stolen
+# credential (or a stolen copy of our database) cannot be presented.
+#
+# So there is no way to hand-craft a valid presentation here, and that is the
+# security model working, not a gap in this file. Two ways to exercise it:
+#
+#   1. `npm run verify:passport`  — drives the whole loop in-process with a
+#      simulated device key: issue → present → verify → revoke, plus every
+#      attack (stolen credential, swapped disclosures, cross-verifier relay).
+#      This is the authoritative end-to-end check.
+#   2. The RN wallet — real on-device key, real taps.
+#
+# Requests below marked [NEEDS DEVICE] will 400 with a key-binding error if
+# you send them by hand. That response IS the correct behaviour.
+#
+# ─── PREREQUISITES ────────────────────────────────────────────────────────
+#
+#   • A VERIFIED user (M0) with a live COMPUTED score (M2). Run
+#     `npm run prisma:seed`, then POST /score/compute.
+#   • An issuer signing key. Created automatically at boot; check §40.
+#   • A registered verifier for anything under §30. `npm run prisma:seed` creates
+#     one ("Acme Bank (dev)", audience `acme-bank`) and prints its key, which is
+#     pre-filled in @partnerKey below. §50 registers additional ones.
+########################################################################
+
+@baseUrl = http://localhost:8000/api/v1
+# The trust-anchor documents are NOT under /api — did:web resolution requires
+# the bare host. See §20.
+@rootUrl = http://localhost:8000
+@contentType = application/json
+
+# ── paste after logging in ──────────────────────────────────────────────
+@accessToken = PASTE_VERIFIED_USER_JWT
+@adminToken  = PASTE_ADMIN_JWT
+
+# ── paste from the responses below ──────────────────────────────────────
+@credentialId = PASTE_CREDENTIAL_ID
+@requestId    = PASTE_VERIFIER_REQUEST_ID
+@cardRef      = PASTE_CARD_QR_REF
+@partnerId    = PASTE_PARTNER_ID
+
+# The verifier `npm run prisma:seed` registers, so §30 works out of the box.
+# Fixed rather than random BECAUSE only a hash of a key is ever stored — a randomly
+# seeded key would be unrecoverable and therefore useless. Dev-only: this value is
+# public in prisma/seed.ts, so never seed it into a production database.
+@partnerKey   = pvk_dev_acme_bank_do_not_use_in_production
+
+# A throwaway P-256 public JWK, so §1.2 works out of the box.
+# Generate your own with:
+#   node -e "const{generateKeyPairSync}=require('crypto');const{publicKey}=generateKeyPairSync('ec',{namedCurve:'prime256v1'});console.log(JSON.stringify(publicKey.export({format:'jwk'})))"
+# NOTE: you will have no private half for it, so §30 will (correctly) refuse.
+@holderX = f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPTcSXvo
+@holderY = x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0
+
+
+########################################################################
+# 1 · The wallet — issue and read the passport            (user JWT)
+########################################################################
+
+### 1.1 My passport, or the state explaining its absence.
+# NOT_ISSUED (never had one) and NEEDS_REISSUE (expired/revoked) are distinct
+# because they are different user actions.
+GET {{baseUrl}}/passport
+Authorization: Bearer {{accessToken}}
+
+### 1.2 Issue — bind the credential to this device's public key.
+# 403 if identity is unverified, no live score exists, or the consent behind
+# the score has lapsed. Each guard runs before a single byte is signed.
+# Response `credential` is the combined wire format: <sd-jwt>~<d1>~…~
+# @name issue
+POST {{baseUrl}}/passport/issue
+Authorization: Bearer {{accessToken}}
+Content-Type: {{contentType}}
+
+{
+  "holderPublicJwk": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "{{holderX}}",
+    "y": "{{holderY}}"
+  },
+  "deviceLabel": "REST Client",
+  "bindPassportNumber": false
+}
+
+### 1.3 Issue with the international tier.
+# Adds the (masked) passport number so a foreign lender can tie the reputation
+# to the document they already trust. If M0 verified no passport, the response
+# `notes` says so rather than silently dropping it.
+POST {{baseUrl}}/passport/issue
+Authorization: Bearer {{accessToken}}
+Content-Type: {{contentType}}
+
+{
+  "holderPublicJwk": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "{{holderX}}",
+    "y": "{{holderY}}"
+  },
+  "bindPassportNumber": true
+}
+
+### 1.4 A private key in the JWK is REJECTED, not stripped.
+# A wallet sending `d` has leaked its key; that must fail loudly. Expect 400.
+POST {{baseUrl}}/passport/issue
+Authorization: Bearer {{accessToken}}
+Content-Type: {{contentType}}
+
+{
+  "holderPublicJwk": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "{{holderX}}",
+    "y": "{{holderY}}",
+    "d": "this-should-never-be-sent"
+  }
+}
+
+### 1.5 A wrong curve is rejected. Expect 400.
+POST {{baseUrl}}/passport/issue
+Authorization: Bearer {{accessToken}}
+Content-Type: {{contentType}}
+
+{
+  "holderPublicJwk": { "kty": "EC", "crv": "P-384", "x": "{{holderX}}", "y": "{{holderY}}" }
+}
+
+### 1.6 The claim catalogue — what the disclosure picker renders.
+# Served from the backend, not bundled, so an un-updated wallet still shows a
+# newer credential's claims as sentences rather than snake_case keys.
+GET {{baseUrl}}/passport/claims
+Authorization: Bearer {{accessToken}}
+
+### 1.7 Share history — who saw what, and when. Refused shares included.
+GET {{baseUrl}}/passport/history?limit=20
+Authorization: Bearer {{accessToken}}
+
+
+########################################################################
+# 2 · Presenting                                          (user JWT)
+########################################################################
+
+### 2.1 The bytes to sign.
+# Returns `sdHash`: a digest committing to the credential PLUS the chosen
+# disclosures, in the exact order they will be sent. The device signs THAT, so
+# the proof cannot be reused over a substituted disclosure set.
+# `nonce` and `audience` are the VERIFIER'S — this endpoint does not invent a
+# nonce, because one is only a replay defence if the party checking it chose it.
+# @name signingMaterial
+POST {{baseUrl}}/passport/challenge
+Authorization: Bearer {{accessToken}}
+Content-Type: {{contentType}}
+
+{
+  "credentialId": "{{credentialId}}",
+  "audience": "acme-bank",
+  "nonce": "a-nonce-at-least-8-chars-long",
+  "revealClaims": ["score_at_least_good"]
+}
+
+### 2.2 [NEEDS DEVICE] Present directly.
+# `kbJwt` must be signed by the private half of the key in §1.2. Without the
+# device you will get KEY_BINDING_FAILED — which is the point.
+POST {{baseUrl}}/passport/present
+Authorization: Bearer {{accessToken}}
+Content-Type: {{contentType}}
+
+{
+  "credentialId": "{{credentialId}}",
+  "revealClaims": ["score_at_least_good"],
+  "verifier": "acme-bank",
+  "nonce": "a-nonce-at-least-8-chars-long",
+  "channel": "API",
+  "kbJwt": "PASTE_DEVICE_SIGNED_KB_JWT"
+}
+
+
+########################################################################
+# 3 · Verifier requests — the card-tap handshake           (user JWT)
+########################################################################
+
+### 3.1 Requests waiting on me. Drives the wallet's inbox badge.
+GET {{baseUrl}}/passport/requests
+Authorization: Bearer {{accessToken}}
+
+### 3.2 One request, as the consent-to-disclose screen needs it.
+# Every claim comes back with a label, its consequence, and why a legitimate
+# verifier would ask — because "needs passport_number" is not a decision anyone
+# can make. `held: false` means this credential does not carry it.
+GET {{baseUrl}}/passport/requests/{{requestId}}
+Authorization: Bearer {{accessToken}}
+
+### 3.3 [NEEDS DEVICE] Approve, with the claims I ticked.
+# Revealing MORE than was asked is refused (400): a verifier that asked for a
+# band must not receive an exact score because the wallet had a bug.
+POST {{baseUrl}}/passport/requests/{{requestId}}/approve
+Authorization: Bearer {{accessToken}}
+Content-Type: {{contentType}}
+
+{
+  "credentialId": "{{credentialId}}",
+  "revealClaims": ["score_at_least_good"],
+  "kbJwt": "PASTE_DEVICE_SIGNED_KB_JWT"
+}
+
+### 3.4 Decline. An explicit "no", distinct from a timeout.
+# The reason is kept for OUR product insight and never shown to the verifier —
+# a holder's reason for saying no is not the asker's business.
+POST {{baseUrl}}/passport/requests/{{requestId}}/decline
+Authorization: Bearer {{accessToken}}
+Content-Type: {{contentType}}
+
+{
+  "reason": "I only wanted to share my band"
+}
+
+
+########################################################################
+# 4 · The physical card                                   (user JWT)
+########################################################################
+
+### 4.1 My card. Null when none has been issued.
+GET {{baseUrl}}/passport/card
+Authorization: Bearer {{accessToken}}
+
+### 4.2 Issue or re-point the card. Idempotent.
+# The card belongs to the PERSON: a refreshed score mints a new credential and
+# the plastic in the user's wallet keeps working, re-pointed rather than
+# reprinted. Response carries `qrSvg`, the TD1 MRZ lines, and the print palette.
+# Copy `verifyUrl`'s trailing segment into @cardRef for §30.3.
+# @name card
+POST {{baseUrl}}/passport/card
+Authorization: Bearer {{accessToken}}
+
+### 4.3 Record that the app wrote the NFC tag.
+POST {{baseUrl}}/passport/card/nfc-written
+Authorization: Bearer {{accessToken}}
+
+### 4.4 Report the card lost.
+# Disables the card AND revokes the credential — a lost card usually means a
+# lost wallet, and the phone may have gone with it. Re-running §4.2 afterwards
+# issues a REPLACEMENT with a fresh reference; the old plastic stays dead.
+POST {{baseUrl}}/passport/card/lost
+Authorization: Bearer {{accessToken}}
+
+
+########################################################################
+# 5 · Holder revocation                                   (user JWT)
+########################################################################
+
+### 5.1 Kill my own passport. Terminal — a new one must be issued.
+# Scoped to credentials I own: someone else's id is a 404, revealing nothing
+# about whether it exists.
+DELETE {{baseUrl}}/passport/credentials/{{credentialId}}/revoke
+Authorization: Bearer {{accessToken}}
+Content-Type: {{contentType}}
+
+{
+  "reason": "no longer needed"
+}
+
+
+########################################################################
+# 20 · The trust anchor — what a stranger's verifier fetches
+#
+# UNAUTHENTICATED, and deliberately NOT under /api/v1. `did:web:pravaah.app`
+# resolves, by specification, to https://pravaah.app/.well-known/did.json —
+# there is no room in a DID for an /api segment. Served under the prefix, our
+# DID document would be unresolvable by every conformant resolver, quietly
+# reducing the passport to something only Pravaah can verify.
+########################################################################
+
+### 20.1 The DID document.
+# Lists EVERY non-retired key, not just the active one: a verifier checking a
+# credential signed six months ago needs the key from six months ago.
+GET {{rootUrl}}/.well-known/did.json
+
+### 20.2 The JWKS, for verifiers that prefer a key set to DID resolution.
+GET {{rootUrl}}/.well-known/jwks.json
+
+### 20.3 SD-JWT VC type metadata, discoverable from the credential's `vct`.
+# What lets a wallet that has never seen a Pravaah credential render it with
+# real labels instead of raw claim keys.
+GET {{rootUrl}}/.well-known/vct/financial-reputation-passport
+
+### 20.4 The revocation status list.
+# One bit per credential, gzipped and published WHOLE — so a verifier checks
+# one credential offline and we never learn who is being checked. Served as a
+# SIGNED status-list credential: without the signature, anyone able to
+# intercept the response could un-revoke a stolen credential by flipping a bit.
+GET {{baseUrl}}/status/1
+
+### 20.5 Issuer metadata — how to verify us, without us.
+# Unauthenticated because a verifier deciding whether to trust Pravaah needs to
+# read this BEFORE they have a key. Includes the ordered verification steps.
+GET {{baseUrl}}/verify/metadata
+
+### 20.6 Presentation templates, so a partner can ask by name.
+GET {{baseUrl}}/verify/templates
+
+
+########################################################################
+# 30 · The partner verify surface                    (partner API key)
+#
+# Authenticated with a partner key for one specific reason: the KB-JWT `aud`.
+# A key binding proof is made out to ONE verifier, and that is what stops a
+# presentation captured at one lender being replayed at another. An anonymous
+# caller could name any audience it liked, turning the strongest replay defence
+# in the credential into a self-declared field.
+#
+# Register a partner in §50 first, then paste its key into @partnerKey.
+########################################################################
+
+### 30.1 Verify a presentation.
+# A rejection is a 200 with `valid: false`, not an HTTP error: "this credential
+# is revoked" is a successful ANSWER, and a 4xx would be indistinguishable from
+# the partner's own request being malformed.
+#
+# `audience` is forced to the authenticated partner's and ignored from the body.
+# Omitting `expectedNonce` returns `replayProtected: false` plus a note saying so.
+#
+# Returns 200, not 201: this endpoint creates nothing. `/verify/request` below does
+# create a request and returns 201.
+POST {{baseUrl}}/verify
+x-pravaah-partner-key: {{partnerKey}}
+Content-Type: {{contentType}}
+
+{
+  "presentation": "PASTE_COMBINED_SD_JWT~disclosure~kbJwt",
+  "expectedNonce": "a-nonce-at-least-8-chars-long",
+  "requiredClaims": ["score_at_least_good"]
+}
+
+### 30.2 Open a request the holder approves in their wallet.
+# Returns a single-use nonce bound to this partner's audience plus a deep link
+# that hands the request to the wallet. Copy `requestId` into @requestId.
+# @name verifierRequest
+POST {{baseUrl}}/verify/request
+x-pravaah-partner-key: {{partnerKey}}
+Content-Type: {{contentType}}
+
+{
+  "template": "DOMESTIC_MICRO_LOAN",
+  "pravaahId": "PVH-XXXX-XXXX-XXXX",
+  "channel": "API",
+  "ttlSeconds": 300
+}
+
+### 30.3 A scanned card resolves to a request here.
+# GET because this is the URL physically encoded on the card — an NFC tap or a
+# QR scan produces a GET. Nothing about the holder is returned, only a request
+# id: exactly as much as a piece of plastic should ever be able to prove.
+GET {{baseUrl}}/verify/card/{{cardRef}}?template=CROSS_BORDER_RENTAL
+x-pravaah-partner-key: {{partnerKey}}
+
+### 30.4 Poll for the holder's answer.
+# Idempotent: the verdict was computed once at approval and is returned from
+# cache, so a retry after a dropped connection gets the SAME answer.
+GET {{baseUrl}}/verify/request/{{requestId}}
+x-pravaah-partner-key: {{partnerKey}}
+
+### 30.5 A custom claim list needs an explicit purpose — the holder must be told why.
+POST {{baseUrl}}/verify/request
+x-pravaah-partner-key: {{partnerKey}}
+Content-Type: {{contentType}}
+
+{
+  "requestedClaims": ["given_name", "nationality", "score_band"],
+  "purpose": "Tenancy application for 14 Orchard Road, Singapore",
+  "pravaahId": "PVH-XXXX-XXXX-XXXX",
+  "channel": "QR",
+  "ttlSeconds": 300
+}
+
+### 30.6 A claim this credential type has never carried is reported, not silently dropped.
+# Expect the response to narrow the request and list `unknownClaims`.
+POST {{baseUrl}}/verify/request
+x-pravaah-partner-key: {{partnerKey}}
+Content-Type: {{contentType}}
+
+{
+  "requestedClaims": ["score_band", "annual_income"],
+  "purpose": "Testing an unknown claim name",
+  "pravaahId": "PVH-XXXX-XXXX-XXXX"
+}
+
+### 30.7 No partner key → 401. The audience must never be self-declared.
+POST {{baseUrl}}/verify
+Content-Type: {{contentType}}
+
+{
+  "presentation": "anything"
+}
+
+
+########################################################################
+# 40 · Admin — credential oversight                        (admin JWT)
+#
+# ADMIN or SENIOR_REVIEWER only. No projection here ever decrypts a
+# credential: an admin needs to know WHICH credentials exist and what state
+# they are in, not the claims inside one. The cleartext disclosures are the
+# holder's, not ours to browse.
+########################################################################
+
+### 40.1 Every issued passport.
+GET {{baseUrl}}/admin/passport?limit=50&offset=0
+Authorization: Bearer {{adminToken}}
+
+### 40.2 Filter to live ones.
+GET {{baseUrl}}/admin/passport?status=ISSUED&limit=50
+Authorization: Bearer {{adminToken}}
+
+### 40.3 Filter to the international tier (bound to a real passport number).
+GET {{baseUrl}}/admin/passport?passportBound=true
+Authorization: Bearer {{adminToken}}
+
+### 40.4 Operational overview.
+# The FAILED presentation rate matters more than the successes: a spike against
+# one credential is the shape a theft attempt makes, and it is invisible on a
+# dashboard that only plots issuance.
+GET {{baseUrl}}/admin/passport/stats
+Authorization: Bearer {{adminToken}}
+
+### 40.5 One credential in full.
+# Includes the supersede chain ("which credential was live on this date?") and
+# every presentation, refused ones included. `claimKeys` lists claim NAMES only.
+GET {{baseUrl}}/admin/passport/credentials/{{credentialId}}
+Authorization: Bearer {{adminToken}}
+
+### 40.6 Its append-only audit trail.
+GET {{baseUrl}}/admin/passport/credentials/{{credentialId}}/audit
+Authorization: Bearer {{adminToken}}
+
+### 40.7 Suspend — a reversible hold.
+# Flips the same status-list bit as a revocation: to a verifier both read "do
+# not accept", which is the correct fail-closed behaviour while an
+# investigation is open. The reason is mandatory and must be substantive.
+POST {{baseUrl}}/admin/passport/credentials/{{credentialId}}/suspend
+Authorization: Bearer {{adminToken}}
+Content-Type: {{contentType}}
+
+{
+  "reason": "Suspected device compromise reported by the holder on 2026-07-27"
+}
+
+### 40.8 Lift the hold. The passport works again immediately.
+POST {{baseUrl}}/admin/passport/credentials/{{credentialId}}/resume
+Authorization: Bearer {{adminToken}}
+Content-Type: {{contentType}}
+
+{
+  "reason": "Investigation closed — no compromise found, holder confirmed device"
+}
+
+### 40.9 Revoke. TERMINAL — there is no un-revoke.
+# Un-revoking would let a credential a verifier already rejected start passing
+# again, and no verifier caches revocation with that possibility in mind.
+POST {{baseUrl}}/admin/passport/credentials/{{credentialId}}/revoke
+Authorization: Bearer {{adminToken}}
+Content-Type: {{contentType}}
+
+{
+  "reason": "Confirmed credential theft — device reported stolen and unrecovered"
+}
+
+### 40.10 A short reason is refused. Expect 400.
+# The reason is the only record of why someone's passport stopped working.
+POST {{baseUrl}}/admin/passport/credentials/{{credentialId}}/revoke
+Authorization: Bearer {{adminToken}}
+Content-Type: {{contentType}}
+
+{
+  "reason": "spam"
+}
+
+
+########################################################################
+# 45 · Admin — issuer keys (our ICAO PKD)                  (admin JWT)
+########################################################################
+
+### 45.1 The key registry.
+# `credentialCount` is what makes retirement safe to reason about: a key with
+# live credentials behind it must stay published.
+GET {{baseUrl}}/admin/passport/keys
+Authorization: Bearer {{adminToken}}
+
+### 45.2 Rotate the signing key. ADMIN only.
+# Safe by construction, which is what makes it pressable during an incident:
+# the old public key stays in the DID document and JWKS until the last
+# credential it signed expires, so nothing already in the wild is invalidated.
+# Re-run §20.1 afterwards — the old key is still listed.
+POST {{baseUrl}}/admin/passport/keys/rotate
+Authorization: Bearer {{adminToken}}
+
+
+########################################################################
+# 50 · Admin — verifier partners                           (admin JWT)
+########################################################################
+
+### 50.1 Registered verifiers.
+GET {{baseUrl}}/admin/passport/partners
+Authorization: Bearer {{adminToken}}
+
+### 50.2 Register another one. ADMIN only.
+# The seed already created `acme-bank`; this adds a second so you can see the
+# one-time key display. Change the audience or expect the 409 in §50.3.
+# The API key is returned ONCE, in this response, and only its sha256 is
+# stored — a key we could re-read is a key that leaks with the database.
+# Copy `apiKey` into @partnerKey and `id` into @partnerId.
+# @name registerPartner
+POST {{baseUrl}}/admin/passport/partners
+Authorization: Bearer {{adminToken}}
+Content-Type: {{contentType}}
+
+{
+  "name": "Acme Bank",
+  "audience": "acme-bank",
+  "contactEmail": "risk@acme.example",
+  "country": "SG"
+}
+
+### 50.3 An audience cannot be reassigned. Expect 409.
+# It is baked into every key binding proof made out to this partner, so
+# reassigning it would let a new partner accept presentations meant for the old.
+POST {{baseUrl}}/admin/passport/partners
+Authorization: Bearer {{adminToken}}
+Content-Type: {{contentType}}
+
+{
+  "name": "Someone Else",
+  "audience": "acme-bank"
+}
+
+### 50.4 Deactivate. The row is KEPT.
+# Their presentations appear in holders' share histories, and deleting the
+# verifier would turn "Acme Bank saw your score band" into an opaque audience
+# string in the one place a user goes to understand what they shared.
+POST {{baseUrl}}/admin/passport/partners/{{partnerId}}/revoke
+Authorization: Bearer {{adminToken}}
+
+
+########################################################################
+# 60 · Negative cases worth seeing fail
+########################################################################
+
+### 60.1 No auth on the wallet → 401.
+GET {{baseUrl}}/passport
+
+### 60.2 A malformed credential id → 400 (not a 500 from Prisma).
+GET {{baseUrl}}/admin/passport/credentials/not-a-uuid
+Authorization: Bearer {{adminToken}}
+
+### 60.3 A status list we do not publish → 404.
+GET {{baseUrl}}/status/999
+
+### 60.4 Verifying garbage → 200 with `valid: false, code: MALFORMED`.
+# A verifier gets a verdict, never an exception.
+POST {{baseUrl}}/verify
+x-pravaah-partner-key: {{partnerKey}}
+Content-Type: {{contentType}}
+
+{
+  "presentation": "not-a-credential"
+}
+
+### 60.5 Sending BOTH shapes is refused. Expect 400.
+# Accepting both and silently preferring one would let a caller send a
+# mismatched pair and get a verdict about the half we happened to read.
+POST {{baseUrl}}/verify
+x-pravaah-partner-key: {{partnerKey}}
+Content-Type: {{contentType}}
+
+{
+  "presentation": "aaaaaaaaaaaaaaaaaaaaaa~bbbbbbbb~cccccccc",
+  "sdJwt": "aaaaaaaa.bbbbbbbb.cccccccc",
+  "disclosures": []
+}
+
+### 60.6 A user JWT on an admin route → 403.
+GET {{baseUrl}}/admin/passport
+Authorization: Bearer {{accessToken}}

@@ -12,37 +12,54 @@ import {
   Press,
   Screen,
   SectionHead,
+  Header,
   Text,
 } from '@/components/ui';
+import { ProfileAvatar } from '@/components/ui/profile-avatar';
 import { ROUTES } from '@/constants/routes.constants';
 import { useAuth } from '@/context/auth-context';
 import { KycStepList } from '@/features/kyc/components/kyc-step-list';
-import { PassportCard } from '@/features/kyc/components/passport-card';
+import {
+  PassportCard,
+  type PlateFace,
+} from '@/features/kyc/components/passport-card';
 import { progress } from '@/features/kyc/flow';
 import { useKycStatus } from '@/features/kyc/use-kyc-status';
+import { PassportVerso } from '@/features/passport/components/passport-verso';
+import { usePassportCode } from '@/features/passport/use-passport-code';
 import { SCORE_BAND_META } from '@/features/score/score-meta';
 import { useScore } from '@/features/score/use-score';
 import { Radius, Space, usePalette } from '@/theme';
 
-/**
- * The Passport tab — the note, and what it still needs.
- *
- * The incumbent stacked six things down this screen at equal weight: the card, a
- * score teaser, a "Verification checks" heading with the check list, a
- * "Start/Continue" button, an "Unlock your reputation" section, and two more
- * buttons — four calls to action on one screen, with no answer to "what do I do
- * now?".
- *
- * There is exactly one next action here at any moment, and it is derived from the
- * state rather than all being rendered at once.
- */
 export default function PassportScreen() {
   const { user } = useAuth();
-  // Poll while a decision is pending so a reviewer's verdict lands on its own.
   const { status, loading, error, refetch } = useKycStatus({ pollMs: 8000 });
   const { score, refetch: refetchScore } = useScore();
   const [refreshing, setRefreshing] = useState(false);
   const p = usePalette();
+
+  const verified = status?.overallStatus === 'VERIFIED';
+  const computed = score && isComputedScore(score) ? score : null;
+
+  /**
+   * The plate's second face.
+   *
+   * Gated on the two things a credential requires — a verified identity and a computed
+   * score — so a holder who has neither costs no request at all. It matches the gate on
+   * `back` below, which is what keeps the plate one-faced for them rather than turning over
+   * onto a window that can only apologise.
+   *
+   * Not polled. A verify code changes when the holder mints one or reports a card lost, and
+   * both of those are actions taken from here or from the wallet — so a focus refetch and
+   * pull-to-refresh cover it, and an 8-second timer on the first screen would not.
+   */
+  const {
+    code,
+    creating,
+    refetch: refetchCode,
+    create: createCode,
+  } = usePassportCode({ enabled: !!verified && computed != null });
+  const [face, setFace] = useState<PlateFace>('recto');
 
   useFocusEffect(
     useCallback(() => {
@@ -51,25 +68,23 @@ export default function PassportScreen() {
     }, [refetch, refetchScore]),
   );
 
-  const onRefresh = useCallback(async () => {
+  const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([refetch(), refetchScore()]);
+    await Promise.all([refetch(), refetchScore(), refetchCode()]);
     setRefreshing(false);
-  }, [refetch, refetchScore]);
+  };
 
   if (loading && !status) {
     return (
-      <Screen tabBar>
+      <Screen tabBar showProfile>
         <PassportSkeleton />
       </Screen>
     );
   }
 
-  const verified = status?.overallStatus === 'VERIFIED';
   const started = status != null && status.overallStatus !== 'NOT_STARTED';
   const { done, total } = status ? progress(status) : { done: 0, total: 0 };
 
-  const computed = score && isComputedScore(score) ? score : null;
   const latent =
     computed && computed.value != null
       ? {
@@ -81,8 +96,11 @@ export default function PassportScreen() {
       : null;
 
   return (
-    <Screen tabBar onRefresh={onRefresh} refreshing={refreshing}>
+    <Screen tabBar showProfile onRefresh={onRefresh} refreshing={refreshing}>
       <View style={styles.sheet}>
+        <Header 
+          title="Passport" 
+        />
         {error ? (
           <Notice tone="error" action="Try again" onAction={() => void refetch()}>
             {error}
@@ -94,8 +112,51 @@ export default function PassportScreen() {
             status={status}
             pravaahId={user?.pravaahId}
             score={latent}
-            onOpenScore={() => router.navigate(ROUTES.TABS.SCORE)}
+            onOpenScore={() => router.push(ROUTES.SCORE.ROOT)}
+            onFaceChange={setFace}
+            /*
+              The verify code, on the plate's own second face. Composed here rather than
+              imported by the plate, so the M0 component that draws the document stays free
+              of any knowledge of the M3 credential behind it.
+
+              Withheld until a credential is actually possible. A holder who has not
+              verified yet has no code and no way to get one from here, and a plate that
+              turns over to say "not yet" is a dead end — this screen's whole doctrine is
+              one action derived from state, and for them that action is the button below.
+            */
+            back={
+              verified && computed
+                ? ({ width, turn }) => (
+                    <PassportVerso
+                      width={width}
+                      pravaahId={user?.pravaahId}
+                      code={code}
+                      creating={creating}
+                      onCreate={() => void createCode()}
+                      onRetry={() => void refetchCode()}
+                      onIssue={() => router.push(ROUTES.PASSPORT.WALLET)}
+                      onOpenCard={() => router.push(ROUTES.PASSPORT.CARD)}
+                      onTurn={turn}
+                    />
+                  )
+                : undefined
+            }
           />
+        ) : null}
+
+        {/* The security model, in the holder's words, and only while they are looking at
+            the code. It is the sentence that makes showing the plate to a stranger a calm
+            act rather than a risky one, and it belongs on rag — the plate is a document,
+            and prose printed on a document is fine print nobody reads. */}
+        {face === 'verso' ? (
+          <View style={[styles.codeNote, { borderColor: p.rule }]}>
+            <Icon name="lock" size={13} color={p.latent} weight={1.3} />
+            <Micro style={styles.fineText}>
+              A scan starts a request — it reveals nothing on its own. You approve what is
+              shared, on this phone, every time. So a photographed code is useless to
+              whoever took it.
+            </Micro>
+          </View>
         ) : null}
 
         {/* The single next action, chosen by state. Never more than one. */}
@@ -131,11 +192,20 @@ export default function PassportScreen() {
             rows rather than a second and third primary button. */}
         {verified && computed ? (
           <View style={styles.links}>
+            {/* M3 leads, because it is the only thing here the user OWNS. The score is a
+                number in our database; the credential is an artefact they hold, present on
+                their own terms, and can have verified abroad without us. */}
+            <LinkRow
+              icon="passport"
+              title="Your reputation passport"
+              detail="A credential you own — issue it, share it selectively, revoke it"
+              onPress={() => router.push(ROUTES.PASSPORT.WALLET)}
+            />
             <LinkRow
               icon="reputation"
               title="Your reputation score"
               detail={`${computed.value ?? '—'} · ${computed.confidenceLabel}`}
-              onPress={() => router.navigate(ROUTES.TABS.SCORE)}
+              onPress={() => router.push(ROUTES.SCORE.ROOT)}
             />
             <LinkRow
               icon="consent"
@@ -189,7 +259,7 @@ function LinkRow({
   detail,
   onPress,
 }: {
-  icon: 'reputation' | 'consent';
+  icon: 'passport' | 'reputation' | 'consent';
   title: string;
   detail: string;
   onPress: () => void;
@@ -221,6 +291,18 @@ const styles = StyleSheet.create({
   // close to it because it is about it, and the sections below breathe apart.
   sheet: { gap: Space.xxl, paddingTop: Space.sm },
   action: { gap: Space.md, marginTop: -Space.sm },
+  /**
+   * Sits tight under the plate — `marginTop` cancels the sheet's own gap, because this
+   * caption is about the object above it rather than a section of its own. A hairline
+   * keyline on the left instead of a Notice: it is a footnote, not an alert.
+   */
+  codeNote: {
+    flexDirection: 'row',
+    gap: Space.sm,
+    marginTop: -Space.lg,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    paddingLeft: Space.md,
+  },
   links: { gap: Space.sm },
   linkOuter: { alignSelf: 'stretch' },
   link: {
