@@ -42,7 +42,28 @@ export const ENV = {
     BASE_URL: 'DECENTRO_BASE_URL',
     CLIENT_ID: 'DECENTRO_CLIENT_ID',
     CLIENT_SECRET: 'DECENTRO_CLIENT_SECRET',
+    /** "KYC & Onboarding" module — PAN and DigiLocker. */
     MODULE_SECRET: 'DECENTRO_MODULE_SECRET',
+    /**
+     * Bank account validation lives in Core Banking, NOT in KYC, and needs its
+     * own module secret plus a provider secret. Sending the KYC secret gets
+     * `error_unauthorized_module`; sending no provider secret gets
+     * `E00039 Provider Not Authorized For Company` — which reads like an
+     * account entitlement problem and is really a missing header.
+     */
+    CORE_BANKING_MODULE_SECRET: 'DECENTRO_CORE_BANKING_MODULE_SECRET',
+    /**
+     * Decentro is multi-bank and issues ONE PROVIDER SECRET PER BANK partner
+     * (`yesb`, `icic`, `dbss`, `idfb`). This must be the secret for the bank
+     * holding the commission-debit account, because Decentro resolves that
+     * account per (company, provider): authenticate on a rail where no
+     * commission account exists and it reports "You have not configured
+     * account details for the commission debits" — which reads like nothing is
+     * set up anywhere, when the account may simply be on a different bank.
+     */
+    BANK_PROVIDER_SECRET: 'DECENTRO_BANK_PROVIDER_SECRET',
+    /** Pre-dates the generic key above; still read so existing envs work. */
+    BANK_PROVIDER_SECRET_YBL: 'DECENTRO_YBL_PROVIDER_SECRET',
   },
   // Field-level encryption of raw provider payloads (AES-256-GCM).
   CRYPTO: {

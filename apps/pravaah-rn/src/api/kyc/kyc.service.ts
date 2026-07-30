@@ -45,10 +45,19 @@ class KycService extends BaseApiService {
     return this.post<RedirectInitiateData>(API_ENDPOINTS.KYC.AADHAAR_INITIATE);
   }
 
-  /** Complete OKYC after the user finishes the DigiLocker consent. */
-  completeAadhaarOkyc(providerRefId: string): Promise<KycProfileStatus> {
+  /**
+   * Complete OKYC after the user finishes the DigiLocker consent.
+   *
+   * @param code The access code shown on the provider's completion page. Sent
+   * only when present — a session that redirected back does not produce one.
+   */
+  completeAadhaarOkyc(
+    providerRefId: string,
+    code?: string,
+  ): Promise<KycProfileStatus> {
     return this.post<KycProfileStatus>(API_ENDPOINTS.KYC.AADHAAR_CALLBACK, {
       providerRefId,
+      ...(code ? { code } : {}),
     });
   }
 

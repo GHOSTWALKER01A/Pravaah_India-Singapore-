@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto'
 
 import { APP_LOGGER, type AppLogger } from '@pravaah/nestjs-logger'
 
+import { KycErrorCode } from '@/common/errors/kyc.errors'
 import { INDIA_KYC } from '@/modules/kyc/providers/india/india-kyc.provider'
 import type { IndiaKycProvider } from '@/modules/kyc/providers/india/india-kyc.provider'
 import { KycOrchestratorService } from '@/modules/kyc/services/kyc-orchestrator.service'
@@ -22,7 +23,9 @@ export class AadhaarOkycService {
   }
 
   /** Step 1 — get the DigiLocker URL; persist the providerRefId to correlate the callback. */
-  async initiate(userId: string): Promise<
+  async initiate(
+    userId: string,
+  ): Promise<
     | { ok: true; authorizationUrl: string; providerRefId: string }
     | { ok: false; reason: string }
   > {
@@ -33,7 +36,7 @@ export class AadhaarOkycService {
     await this.orchestrator.recordCheck(
       userId,
       CheckType.AADHAAR_OKYC,
-      'decentro',
+      this.india.id,
       { status: CheckStatus.PENDING, providerRefId: res.value.providerRefId },
     )
     return {
@@ -47,16 +50,54 @@ export class AadhaarOkycService {
   async complete(
     userId: string,
     providerRefId: string,
-  ): Promise<{ ok: boolean; reason?: string }> {
+    code?: string,
+  ): Promise<{
+    ok: boolean
+    reason?: string
+    integration?: boolean
+    /** Consent is not finished; the check stays PENDING and is resumable. */
+    pending?: boolean
+    /** The pasted DigiLocker code was rejected — the user must re-run consent. */
+    invalidCode?: boolean
+  }> {
     const traceId = randomUUID()
-    const res = await this.india.fetchOkyc(providerRefId, traceId)
+    const res = await this.india.fetchOkyc(providerRefId, traceId, code)
 
     if (!res.ok) {
       this.logger.warn(`[${this.complete.name}] OKYC fetch failed`, {
         userId,
         providerRefId,
+        code: res.error.code,
         retryable: res.error.retryable,
+        /**
+         * The provider's own body, verbatim.
+         *
+         * Every OKYC failure so far has been diagnosable only from Decentro's
+         * `responseKey`, and none of it was reaching the log — leaving
+         * "DigiLocker consent not completed yet" as the sole evidence for four
+         * distinct causes. It carries no Aadhaar data: this branch runs only
+         * when the fetch FAILED, so the body is an error envelope.
+         */
+        providerResponse: res.error.cause,
       })
+
+      // Our integration, not the user's Aadhaar — leave the check PENDING as it
+      // was so they can resume, rather than failing them for our fault.
+      if (res.error.code === KycErrorCode.INTEGRATION_ERROR) {
+        return { ok: false, reason: res.error.message, integration: true }
+      }
+
+      /**
+       * An expired or wrong code. Recoverable by the user, and only by starting
+       * a new session — so record NOTHING and hand back the provider's own
+       * wording, which already names the fix. Writing a FAILED check here would
+       * push the whole profile to ACTION_REQUIRED over a lapsed 40-character
+       * string.
+       */
+      if (res.error.code === KycErrorCode.INVALID_INPUT) {
+        return { ok: false, reason: res.error.message, invalidCode: true }
+      }
+
       await this.orchestrator.recordCheck(
         userId,
         CheckType.AADHAAR_OKYC,
@@ -68,13 +109,17 @@ export class AadhaarOkycService {
           providerRefId,
         },
       )
-      return { ok: false, reason: res.error.message }
+      return {
+        ok: false,
+        reason: res.error.message,
+        pending: res.error.retryable,
+      }
     }
 
     await this.orchestrator.recordCheck(
       userId,
       CheckType.AADHAAR_OKYC,
-      'decentro',
+      this.india.id,
       {
         status: CheckStatus.PASSED,
         providerRefId,

@@ -8,30 +8,30 @@ RUN npm install --package-lock-only --ignore-scripts \
     && turbo prune parvaah-be --docker
 
 FROM node:22-alpine AS builder
+
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
+
 ENV NODE_OPTIONS=--max-old-space-size=4096
 
-ARG SUPABASE_DIRECT_URL
+ARG DATABASE_URL
 
-# Prisma config loader validates SUPABASE_DIRECT_URL even during `prisma generate`
-# (no DB connection is made — it just needs the var to exist).
-# A placeholder value is sufficient; it is only set in this build stage.
-ENV SUPABASE_DIRECT_URL=${SUPABASE_DIRECT_URL:-postgresql://build:build@localhost:5432/build}
+# Prisma config requires DATABASE_URL during prisma generate.
+# This fallback is only for image build time.
+ENV DATABASE_URL=${DATABASE_URL:-postgresql://build:build@localhost:5432/build}
 
 COPY --from=pruner /app/out/full/ .
-# Install from the pruned lockfile so the workspace graph matches the prune output.
+
 COPY --from=pruner /app/out/package-lock.json ./package-lock.json
+
 RUN npm ci
+
 RUN npx turbo run build --filter=parvaah-be
-# Inject Sentry Debug IDs into the exact JS/source maps that the runtime image
-# will ship. Upload happens outside Docker so no Sentry auth token is baked into
-# an image layer.
+
 RUN npx --no-install sentry-cli sourcemaps inject apps/pravaah-be/dist
 
 RUN npm prune --omit=dev --workspaces --include-workspace-root \
     && npm cache clean --force
-
 FROM scratch AS sentry-artifacts
 COPY --from=builder /app/apps/pravaah-be/dist /dist
 

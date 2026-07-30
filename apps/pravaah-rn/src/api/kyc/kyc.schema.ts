@@ -29,6 +29,12 @@ export interface KycCheck {
   status: CheckStatus;
   provider?: string;
   confidence?: number | null;
+  /**
+   * The provider's session reference. Lets a redirect step (DigiLocker) be
+   * resumed from server state after the app was backgrounded or restarted mid
+   * consent — component state alone forgot it.
+   */
+  providerRefId?: string | null;
   updatedAt?: string;
 }
 

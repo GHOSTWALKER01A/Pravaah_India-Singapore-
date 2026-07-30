@@ -26,6 +26,13 @@ type ConsentState = 'PENDING' | 'APPROVED' | 'DENIED'
  */
 @Injectable()
 export class DevIndiaKycProvider implements IndiaKycProvider {
+  /**
+   * Deliberately NOT 'decentro'. Every check this provider records is labelled
+   * as simulated, so a reviewer reading the case — or an auditor reading the
+   * log a year later — can tell it apart from a real one.
+   */
+  readonly id = 'dev-india'
+
   // Matches the seeded India persona so a demo user reconciles to a clean name.
   private readonly demoName = 'Arjun Sharma'
   // Consent state per OKYC reference, updated by the mock consent page.
@@ -62,6 +69,9 @@ export class DevIndiaKycProvider implements IndiaKycProvider {
   async fetchOkyc(
     providerRefId: string,
     _traceId: string,
+    // The mock consent page has no access code to copy, so the real rail's
+    // pasted code is accepted and ignored rather than made mandatory here.
+    _code?: string,
   ): Promise<Result<OkycResult>> {
     const state = this.consent.get(providerRefId)
 

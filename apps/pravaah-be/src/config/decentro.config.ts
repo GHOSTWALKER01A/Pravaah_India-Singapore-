@@ -2,37 +2,116 @@
  * ┌──────────────────────────────────────────────────────────────────────────┐
  * │  DECENTRO — single source of truth for every vendor-specific literal.      │
  * │                                                                            │
- * │  These paths / header names / response fields / status codes are          │
- * │  production-SHAPED (Decentro v2 KYC module, staging host                   │
- * │  `in.staging.decentro.tech`). CONFIRM the exact values against your        │
- * │  dashboard's API reference at https://docs.decentro.tech and edit ONLY     │
- * │  this file — the provider, error mapping, retries and state handling all   │
- * │  stay unchanged.                                                           │
+ * │  VERIFIED against the live staging host `in.staging.decentro.tech` on      │
+ * │  2026-07-30 with the Pravaah account's KYC & Onboarding module secret.     │
+ * │  The provider, error mapping, retries and state handling depend only on    │
+ * │  this file — a vendor/version change is an edit HERE, nowhere else.        │
+ * │                                                                            │
+ * │  Decentro mixes TWO envelope generations and the KYC rail needs both:      │
+ * │    v1 (`/kyc/...`)     → verdict at the TOP level (`kycResult`, `kycStatus`)│
+ * │                          and `consent` is a STRING ("Y").                  │
+ * │    v2 (`/v2/kyc/...`)  → verdict under `data`, `consent` is a BOOLEAN.     │
+ * │  Do NOT "tidy" PAN onto /v2: `/v2/kyc/public_registry/validate` answers    │
+ * │  `error_invalid_document_type` for EVERY document type on this account,    │
+ * │  and `/v2/kyc/pan` does not exist (404). Both surface to the user as       │
+ * │  "the income-tax database did not recognise that PAN".                     │
  * └──────────────────────────────────────────────────────────────────────────┘
  */
 
-/** Decentro's success responseCode. CONFIRM. */
+/** Decentro's success responseCode (shared by both envelope generations). */
 export const DECENTRO_SUCCESS_CODE = 'S00000'
 
-/** Endpoint paths (relative to DECENTRO_BASE_URL). CONFIRM each. */
+/**
+ * Endpoint paths (relative to DECENTRO_BASE_URL).
+ *
+ * PAN_VERIFY is the **v1** public-registry route on purpose — see the header.
+ * BANK_ACCOUNT_VERIFY is the only banking path that resolves, but this account
+ * answers `E00039 Provider Not Authorized For Company`; penny-drop stays blocked
+ * until Decentro enables the provider, and no code change fixes that.
+ */
 export const DECENTRO_PATHS = {
-  PAN_VERIFY: '/v2/kyc/pan',
+  PAN_VERIFY: '/kyc/public_registry/validate',
   DIGILOCKER_INITIATE: '/v2/kyc/digilocker/initiate_session',
-  DIGILOCKER_FETCH: '/v2/kyc/digilocker/fetch_documents',
-  BANK_ACCOUNT_VERIFY: '/v2/banking/account_verification',
+  /**
+   * Exchanges the DigiLocker authorisation code for an access token bound to
+   * the session. MANDATORY and easy to miss: until it succeeds, the session is
+   * not consented as far as every other DigiLocker endpoint is concerned, and
+   * they all reject it with `error_invalid_transaction_id` — the same answer
+   * they give for a session that never existed.
+   *
+   * Note the `/code` suffix. `/v2/kyc/digilocker/access_token` without it is a
+   * different endpoint that authenticates with an OTP instead.
+   */
+  DIGILOCKER_EXCHANGE_CODE: '/v2/kyc/digilocker/access_token/code',
+  DIGILOCKER_FETCH: '/v2/kyc/digilocker/eaadhaar',
+  BANK_ACCOUNT_VERIFY: '/core_banking/money_transfer/validate_account',
 } as const
+
+/**
+ * Decentro validates the consent purpose as a 20–50 character string and
+ * rejects the whole request outside that band (`error_long_purpose_length` /
+ * `error_empty_purpose`). Keep any edit inside it.
+ */
+export const DECENTRO_CONSENT_PURPOSE = 'Customer KYC identity check'
+
+/** `document_type` for the public-registry validate call. */
+export const DECENTRO_DOCUMENT_TYPE_PAN = 'PAN'
+
+/**
+ * `responseKey` every DigiLocker endpoint returns for a session it will not
+ * act on. It arrives as an HTTP 400, which would otherwise be classified as a
+ * broken integration — it is neither that nor a rejected Aadhaar, just "not
+ * usable yet", so the check stays retryable.
+ *
+ * It is NOT diagnostic. A session that never existed, one the user has not
+ * consented on, and one whose code has not been exchanged all produce this
+ * exact key — which is what made the missing exchange step so hard to see.
+ */
+export const DECENTRO_KEY_OKYC_SESSION_INCOMPLETE =
+  'error_invalid_transaction_id'
+
+/**
+ * The DigiLocker authorisation code is single-use and short-lived. Once it
+ * lapses the session cannot be revived either, so the user has to start a new
+ * one — this must reach them as instructions, never as a failed Aadhaar.
+ */
+export const DECENTRO_KEY_OKYC_CODE_EXPIRED = 'error_invalid_auth_code'
 
 /** Auth header names Decentro expects. CONFIRM casing/spelling. */
 export const DECENTRO_HEADERS = {
   CLIENT_ID: 'client_id',
   CLIENT_SECRET: 'client_secret',
   MODULE_SECRET: 'module_secret',
+  /** Core Banking only — the bank rail behind account validation. */
+  PROVIDER_SECRET: 'provider_secret',
 } as const
 
 /**
- * Response field names we read out of `data`. Decentro has varied these across
- * versions, so we tolerate several aliases per field. CONFIRM and prune to the
- * ones your account actually returns.
+ * `validation_type` for account validation. `pennydrop` credits ₹1 by IMPS and
+ * reads the name the bank returns; `penniless` asks without moving money.
+ * Penny drop is chosen because the ₹1 credit is what proves the account can
+ * actually RECEIVE — a penniless check can pass for an account that cannot.
+ */
+export const DECENTRO_VALIDATION_TYPE_PENNY_DROP = 'pennydrop'
+
+/**
+ * `purpose_message` must be 5–255 characters; outside that the whole request is
+ * refused before the account is ever looked at.
+ */
+export const DECENTRO_BANK_PURPOSE = 'Account verification for KYC'
+
+/**
+ * Response field VALUES we branch on. Decentro has varied these across
+ * versions, so we tolerate several aliases per field.
+ *
+ * PAN: v1 returns `kycResult.idStatus: "VALID"` alongside `responseKey:
+ * "success_pan"`.
+ *
+ * BANK: `accountStatus` is documented as `Valid` / `Invalid` / `nre_account` /
+ * `Inconclusive` — mixed case, so every comparison here upper-cases first.
+ * `Inconclusive` deliberately does NOT pass: the bank did not confirm the
+ * account, and treating "we could not tell" as verified is how money reaches
+ * an account nobody checked.
  */
 export const DECENTRO_FIELDS: {
   PAN_STATUS_VALUES_VALID: readonly string[]

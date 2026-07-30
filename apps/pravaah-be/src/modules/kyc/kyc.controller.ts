@@ -32,7 +32,10 @@ import {
   type VerifyPanDto,
 } from '@pravaah/schema'
 
-import { User, type AuthenticatedUser } from '@/common/decorators/user.decorator'
+import {
+  User,
+  type AuthenticatedUser,
+} from '@/common/decorators/user.decorator'
 import { AuthGuard } from '@/common/guards/auth.guard'
 import { ZodValidationPipe } from '@/common/pipes/zod-validation.pipes'
 import { ResponseBuilder } from '@/utils/response-builder'
@@ -118,7 +121,15 @@ export class KycController {
       userId: user.id,
     })
     const userId = await this.orchestrator.resolveUserId(user.id)
-    await this.pan.verify(userId, dto.pan)
+    const result = await this.pan.verify(userId, dto.pan)
+    // An integration fault recorded no check, so the status below would come
+    // back unchanged and the app would read that as "still on PAN" with no
+    // explanation. Say plainly that the check could not be run.
+    if (result.integration) {
+      throw new ServiceUnavailableException(
+        'The PAN check is temporarily unavailable. Your PAN was not rejected — please try again shortly.',
+      )
+    }
     // Return the refreshed canonical status (the check outcome is reflected in
     // its `checks[]`), so the app renders from one shape everywhere.
     const data = await this.orchestrator.getProfileStatus(userId)
@@ -150,7 +161,17 @@ export class KycController {
       providerRefId: dto.providerRefId,
     })
     const userId = await this.orchestrator.resolveUserId(user.id)
-    await this.okyc.complete(userId, dto.providerRefId)
+    const result = await this.okyc.complete(userId, dto.providerRefId, dto.code)
+    if (result.integration) {
+      throw new ServiceUnavailableException(
+        'DigiLocker could not be reached. Your Aadhaar was not rejected — please try again shortly.',
+      )
+    }
+    // The code, not the identity. A 400 carries the provider's own wording,
+    // which already tells the user to start a new DigiLocker session.
+    if (result.invalidCode) {
+      throw new BadRequestException(result.reason)
+    }
     const data = await this.orchestrator.getProfileStatus(userId)
     return ResponseBuilder.success(data, 'DigiLocker fetch processed')
   }
@@ -165,7 +186,17 @@ export class KycController {
       userId: user.id,
     })
     const userId = await this.orchestrator.resolveUserId(user.id)
-    await this.bank.verify(userId, dto.account, dto.ifsc, dto.cardValidity)
+    const result = await this.bank.verify(
+      userId,
+      dto.account,
+      dto.ifsc,
+      dto.cardValidity,
+    )
+    if (result.integration) {
+      throw new ServiceUnavailableException(
+        'The bank check is temporarily unavailable. Your account was not rejected — please try again shortly.',
+      )
+    }
     const data = await this.orchestrator.getProfileStatus(userId)
     return ResponseBuilder.success(data, 'Penny-drop processed')
   }

@@ -32,13 +32,12 @@ export async function httpJson<T>(
       return Ok(res.data)
     } catch (e: unknown) {
       const err = e as {
-        response?: { status?: number; data?: { message?: string } }
+        response?: { status?: number; data?: unknown }
         code?: string
       }
       const status = err?.response?.status
       const isTimeout = err?.code === 'ECONNABORTED'
-      const transient =
-        !status || RETRYABLE_STATUS.has(status) || isTimeout
+      const transient = !status || RETRYABLE_STATUS.has(status) || isTimeout
 
       if (transient && attempt < MAX_RETRIES) {
         attempt++
@@ -61,10 +60,19 @@ export async function httpJson<T>(
           ),
         )
       }
+      /**
+       * A non-transient HTTP failure (4xx) is the provider refusing to PROCESS
+       * our request — bad path, bad credentials, a product the account lacks,
+       * a field it did not like. It is NOT a verdict on the user's document;
+       * verdicts arrive with HTTP 200 and are classified by the provider class
+       * from the response body. Mapping this to PROVIDER_REJECTED is what made
+       * a wrong endpoint path read as "your PAN is invalid".
+       */
       return Err(
         new KycError(
-          KycErrorCode.PROVIDER_REJECTED,
-          err?.response?.data?.message ?? 'Provider rejected request',
+          KycErrorCode.INTEGRATION_ERROR,
+          providerMessage(err?.response?.data) ??
+            `Provider rejected request (HTTP ${status ?? 'unknown'})`,
           false,
           err?.response?.data,
         ),
@@ -75,4 +83,25 @@ export async function httpJson<T>(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Pull the most useful human-readable line out of a provider error body.
+ * Vendors nest it inconsistently (`message`, `error.message`, `data.message`)
+ * and a WAF/edge rejection may return HTML with no message at all — in which
+ * case we return undefined so the caller can fall back to the status code.
+ * Silently reporting a bare 403 as "Provider rejected request" hid a redirect
+ * URL that Decentro's edge refused.
+ */
+function providerMessage(body: unknown): string | undefined {
+  if (typeof body !== 'object' || body === null) return undefined
+  const b = body as Record<string, unknown>
+  const candidates = [
+    b.message,
+    (b.error as Record<string, unknown> | undefined)?.message,
+    (b.data as Record<string, unknown> | undefined)?.message,
+  ]
+  return candidates.find(
+    (c): c is string => typeof c === 'string' && c.length > 0,
+  )
 }

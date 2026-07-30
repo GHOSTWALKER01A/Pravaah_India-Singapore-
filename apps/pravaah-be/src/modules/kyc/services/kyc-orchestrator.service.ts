@@ -47,6 +47,15 @@ export interface KycProfileStatusDto {
     status: CheckStatus
     provider: string
     confidence: number | null
+    /**
+     * The provider's session/transaction reference. Exposed so a redirect-based
+     * step (DigiLocker, Singpass) can be RESUMED from server state: the app
+     * held this only in component state, so backgrounding the app during
+     * consent lost it and the user came back to a screen that had forgotten
+     * they ever started. Not a secret — the client is handed the same value by
+     * the initiate call.
+     */
+    providerRefId: string | null
     updatedAt: string
   }[]
 }
@@ -343,6 +352,7 @@ export class KycOrchestratorService {
         status: c.status,
         provider: c.provider,
         confidence: c.confidence,
+        providerRefId: c.providerRefId,
         updatedAt: c.updatedAt.toISOString(),
       })),
     }
