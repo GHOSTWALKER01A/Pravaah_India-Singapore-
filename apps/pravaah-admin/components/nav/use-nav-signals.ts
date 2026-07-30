@@ -66,10 +66,10 @@ export function useNavSignals(): NavSignalValues {
     paymentsNeedAttention: payments.data?.needsAttention,
     openMismatches: payments.data?.openMismatches,
     openDisputes: payments.data?.openDisputes,
-    claimsAwaitingReview: insurance.data?.attention.claimsAwaitingReview,
-    unpaidClaims: insurance.data?.attention.pendingPayouts,
-    openFraudCases: fraud.data?.cases.open,
-    fraudSlaBreached: fraud.data?.cases.slaBreached,
+    claimsAwaitingReview: insurance.data?.attention?.claimsAwaitingReview,
+    unpaidClaims: insurance.data?.attention?.pendingPayouts,
+    openFraudCases: fraud.data?.cases?.open,
+    fraudSlaBreached: fraud.data?.cases?.slaBreached,
   };
 }
 
