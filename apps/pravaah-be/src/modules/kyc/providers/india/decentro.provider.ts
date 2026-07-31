@@ -12,6 +12,7 @@ import {
   DECENTRO_KEY_OKYC_SESSION_INCOMPLETE,
   DECENTRO_FIELDS,
   DECENTRO_HEADERS,
+  DECENTRO_PAN_TIMEOUT_MS,
   DECENTRO_PATHS,
   DECENTRO_SUCCESS_CODE,
 } from '@/config/decentro.config'
@@ -90,6 +91,7 @@ export class DecentroProvider implements IndiaKycProvider {
         },
       },
       traceId,
+      { timeoutMs: DECENTRO_PAN_TIMEOUT_MS, maxRetries: 0 },
     )
     if (!res.ok) return res
 

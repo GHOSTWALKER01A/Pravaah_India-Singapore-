@@ -58,6 +58,25 @@ export const DECENTRO_CONSENT_PURPOSE = 'Customer KYC identity check'
 export const DECENTRO_DOCUMENT_TYPE_PAN = 'PAN'
 
 /**
+ * PAN_VERIFY's own timeout budget, deliberately far above the 15s default.
+ *
+ * This route proxies the income-tax department's registry, so its tail latency
+ * belongs to that database rather than to Decentro — the edge answers an
+ * unauthenticated probe in ~450ms while a validate call can stall well past 15s.
+ * The default budget turned that stall into `TIMEOUT / "Provider timeout"` on a
+ * PAN that was never actually checked.
+ *
+ * Paired with `maxRetries: 0` at the call site on purpose. Retrying a slow
+ * government lookup does not make it faster, and the old 3-attempt ladder cost
+ * the user ~47s (15s + 0.6s + 15s + 1.2s + 15s) before reporting failure —
+ * longer than simply waiting once. A single 30s attempt fails sooner in the
+ * worst case and succeeds in the window that previously timed out. The check is
+ * left PENDING and retryable, so a genuine blip is recovered by the next
+ * attempt rather than by hammering the registry inside one request.
+ */
+export const DECENTRO_PAN_TIMEOUT_MS = 30_000
+
+/**
  * `responseKey` every DigiLocker endpoint returns for a session it will not
  * act on. It arrives as an HTTP 400, which would otherwise be classified as a
  * broken integration — it is neither that nor a rejected Aadhaar, just "not
