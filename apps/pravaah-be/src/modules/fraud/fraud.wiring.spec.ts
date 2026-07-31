@@ -1,6 +1,6 @@
 import { Test, type TestingModule } from '@nestjs/testing'
 
-import { AppModule } from '@/app.module'
+import { AppModule } from '../../app.module'
 import { PrismaService } from '@/modules/database/prisma/prisma.service'
 import { FraudProviderRegistry } from '@/modules/fraud/providers/fraud-provider.registry'
 import { DeviceTrustService } from '@/modules/fraud/services/device-trust.service'

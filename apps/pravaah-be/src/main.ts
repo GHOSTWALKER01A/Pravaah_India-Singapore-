@@ -10,7 +10,7 @@ import {
 } from '@pravaah/nestjs-logger'
 import helmet from 'helmet'
 
-import { AppModule } from '@/app.module'
+import { AppModule } from './app.module'
 import { WELL_KNOWN_ROUTES } from '@/modules/passport/passport.route'
 
 async function bootstrap(): Promise<void> {

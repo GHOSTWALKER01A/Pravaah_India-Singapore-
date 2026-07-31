@@ -8,8 +8,8 @@ import {
   HttpAccessLogInterceptor,
 } from '@pravaah/nestjs-logger'
 
-import { AppController } from '@/app.controller'
-import { AppService } from '@/app.service'
+import { AppController } from './app.controller'
+import { AppService } from './app.service'
 import { CacheInterceptor } from '@/common/interceptors/cache.interceptor'
 import { AuditModule } from '@/modules/audit/audit.module'
 import { AuthCoreModule } from '@/modules/auth/auth-core.module'
