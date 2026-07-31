@@ -13,9 +13,9 @@ import {
   Screen,
   SectionHead,
   Header,
+  Spinner,
   Text,
 } from '@/components/ui';
-import { ProfileAvatar } from '@/components/ui/profile-avatar';
 import { ROUTES } from '@/constants/routes.constants';
 import { useAuth } from '@/context/auth-context';
 import { KycStepList } from '@/features/kyc/components/kyc-step-list';
@@ -23,22 +23,36 @@ import {
   PassportCard,
   type PlateFace,
 } from '@/features/kyc/components/passport-card';
-import { progress } from '@/features/kyc/flow';
+import { awaitingApproval, progress } from '@/features/kyc/flow';
 import { useKycStatus } from '@/features/kyc/use-kyc-status';
 import { PassportVerso } from '@/features/passport/components/passport-verso';
+import { PhysicalCardPanel } from '@/features/passport/components/physical-card-panel';
+import { VerifyCodePanel } from '@/features/passport/components/verify-code-panel';
 import { usePassportCode } from '@/features/passport/use-passport-code';
 import { SCORE_BAND_META } from '@/features/score/score-meta';
+import { ScoreTeaser } from '@/features/score/components/score-teaser';
 import { useScore } from '@/features/score/use-score';
 import { Radius, Space, usePalette } from '@/theme';
 
 export default function PassportScreen() {
   const { user } = useAuth();
   const { status, loading, error, refetch } = useKycStatus({ pollMs: 8000 });
-  const { score, refetch: refetchScore } = useScore();
+  const { score, compute, refetch: refetchScore } = useScore();
   const [refreshing, setRefreshing] = useState(false);
   const p = usePalette();
 
+  /**
+   * VERIFIED means a reviewer said so.
+   *
+   * Read straight off the canonical status rather than inferred from "every check
+   * cleared", and that distinction is the whole flow: clearing the checks puts the profile
+   * IN_REVIEW, and only an admin decision moves it to VERIFIED. A screen that treated a
+   * full checklist as verification would print a VERIFIED seal on a passport nobody had
+   * approved — which is exactly what this screen used to do while the profile screen,
+   * reading the same account, said "in progress".
+   */
   const verified = status?.overallStatus === 'VERIFIED';
+  const approvalPending = status ? awaitingApproval(status) : false;
   const computed = score && isComputedScore(score) ? score : null;
 
   /**
@@ -98,8 +112,8 @@ export default function PassportScreen() {
   return (
     <Screen tabBar showProfile onRefresh={onRefresh} refreshing={refreshing}>
       <View style={styles.sheet}>
-        <Header 
-          title="Passport" 
+        <Header
+          title="Passport"
         />
         {error ? (
           <Notice tone="error" action="Try again" onAction={() => void refetch()}>
@@ -159,61 +173,118 @@ export default function PassportScreen() {
           </View>
         ) : null}
 
-        {/* The single next action, chosen by state. Never more than one. */}
+        {/* The single next action, chosen by state. Never more than one — and when the
+            state is "somebody else owes us a decision", there is none at all, because
+            inventing a button for a wait is how an app pretends the user is stuck. */}
         {!verified ? (
-          <View style={styles.action}>
-            <Button
-              label={started ? 'Continue verification' : 'Start verification'}
-              icon="verify"
-              onPress={() => router.navigate(ROUTES.TABS.KYC)}
-            />
-            <Micro center>
-              {started
-                ? `${done} of ${total} checks cleared · progress is saved as you go`
-                : 'About 4 minutes. You can stop and resume at any point.'}
-            </Micro>
-          </View>
+          approvalPending ? (
+            <View style={styles.action}>
+              <Notice tone="caution" title="Waiting for approval">
+                Every check has cleared. A reviewer signs off on each new passport before
+                it is issued — usually within a day. We will notify you, and this screen
+                updates by itself.
+              </Notice>
+              <Button
+                label="See your checks"
+                variant="quiet"
+                inline
+                onPress={() => router.push(ROUTES.KYC.STATUS)}
+              />
+            </View>
+          ) : (
+            <View style={styles.action}>
+              <Button
+                label={started ? 'Continue verification' : 'Start verification'}
+                icon="verify"
+                onPress={() => router.navigate(ROUTES.TABS.KYC)}
+              />
+              <Micro center>
+                {started
+                  ? `${done} of ${total} checks cleared · progress is saved as you go`
+                  : 'About 4 minutes. You can stop and resume at any point.'}
+              </Micro>
+            </View>
+          )
         ) : !computed ? (
-          <View style={styles.action}>
-            <Button
-              label="Share data to build your score"
-              icon="consent"
-              onPress={() => router.push(ROUTES.CONSENT.DASHBOARD)}
+          <ScoreAction score={score} onCompute={() => void compute()} />
+        ) : null}
+
+        {/* ── The three things a verified holder actually has ──────────────────
+            The score, the credential's code, and the plastic. They were all
+            navigations away from the screen named Passport, which is why a holder
+            with a full checklist and shared data could not tell what they had. */}
+        {verified ? (
+          <View style={styles.block}>
+            <SectionHead
+              title="Reputation score"
+              detail={
+                computed
+                  ? `${computed.value ?? '—'} · ${computed.confidenceLabel}`
+                  : 'What your shared data adds up to'
+              }
             />
-            <Micro center>
-              Your identity is verified. A reputation score needs your financial
-              history, shared through the Account Aggregator — and revocable at
-              any time.
-            </Micro>
+            {/* The teaser is honest in every state — the number with its confidence
+                interval when there is one, and the reason there is not when there
+                is not. So it is rendered as soon as the server has answered at all. */}
+            {score ? (
+              <ScoreTeaser score={score} />
+            ) : (
+              <Micro tone="dim">Loading your score…</Micro>
+            )}
           </View>
         ) : null}
 
-        {/* Verified holders get the two places the credential leads, as quiet
-            rows rather than a second and third primary button. */}
         {verified && computed ? (
-          <View style={styles.links}>
-            {/* M3 leads, because it is the only thing here the user OWNS. The score is a
-                number in our database; the credential is an artefact they hold, present on
-                their own terms, and can have verified abroad without us. */}
-            <LinkRow
-              icon="passport"
-              title="Your reputation passport"
-              detail="A credential you own — issue it, share it selectively, revoke it"
-              onPress={() => router.push(ROUTES.PASSPORT.WALLET)}
-            />
-            <LinkRow
-              icon="reputation"
-              title="Your reputation score"
-              detail={`${computed.value ?? '—'} · ${computed.confidenceLabel}`}
-              onPress={() => router.push(ROUTES.SCORE.ROOT)}
-            />
-            <LinkRow
-              icon="consent"
-              title="Data sharing"
-              detail="Review or revoke what powers your score"
-              onPress={() => router.push(ROUTES.CONSENT.DASHBOARD)}
-            />
-          </View>
+          <>
+            <View style={styles.block}>
+              <SectionHead
+                title="Show this to a verifier"
+                detail="They scan it, you approve on this phone"
+              />
+              <VerifyCodePanel
+                code={code}
+                pravaahId={user?.pravaahId}
+                creating={creating}
+                onCreate={() => void createCode()}
+                onRetry={() => void refetchCode()}
+                onIssue={() => router.push(ROUTES.PASSPORT.WALLET)}
+              />
+            </View>
+
+            {/* Only once the plastic exists. A preview of a card nobody has been
+                issued would be a picture of something the holder does not own. */}
+            {code.state === 'READY' ? (
+              <View style={styles.block}>
+                <SectionHead
+                  title="Your physical passport"
+                  detail="Card-sized, for the times a phone is not the natural thing to hand over"
+                />
+                <PhysicalCardPanel
+                  card={code.card}
+                  onPress={() => router.push(ROUTES.PASSPORT.CARD)}
+                />
+              </View>
+            ) : null}
+
+            {/* The two destinations the sections above do not already contain.
+                M3 leads, because it is the only thing here the user OWNS — the score is
+                a number in our database; the credential is an artefact they hold,
+                present on their own terms, and can have verified abroad without us. */}
+            <View style={styles.links}>
+              <LinkRow
+                icon="passport"
+                title="Your reputation passport"
+                detail="A credential you own — issue it, share it selectively, revoke it"
+                onPress={() => router.push(ROUTES.PASSPORT.WALLET)}
+              />
+              <LinkRow
+                icon="consent"
+                title="Data sharing"
+                detail="Review or revoke what powers your score"
+                onPress={() => router.push(ROUTES.CONSENT.DASHBOARD)}
+              />
+            </View>
+          </>
         ) : null}
 
         <View style={styles.checks}>
@@ -246,6 +317,79 @@ export default function PassportScreen() {
         </View>
       </View>
     </Screen>
+  );
+}
+
+/**
+ * The one action a verified holder without a score needs, chosen by WHY they have none.
+ *
+ * These five states are not interchangeable and the old copy treated them as one: it told
+ * everybody to "share your data to build your score", including the holder who had already
+ * shared it and was waiting, and the holder whose data was too thin to score. Being sent
+ * back to a consent flow you have already completed is what makes an app feel broken.
+ */
+function ScoreAction({
+  score,
+  onCompute,
+}: {
+  score: ReturnType<typeof useScore>['score'];
+  /** Re-runs inference. Offered for FAILED only — every other state needs data, not a retry. */
+  onCompute: () => void;
+}) {
+  // Nothing has come back yet. A CTA guessed before the answer arrives is a CTA that
+  // flickers into a different one a moment later.
+  if (!score) return null;
+
+  if (score.state === 'PENDING') {
+    return (
+      <View style={styles.waiting}>
+        <Spinner size={18} label="Working out your score" />
+        <Text role="bodySm" tone="dim" style={styles.fineText}>
+          Your data is in and the model is running. This updates by itself.
+        </Text>
+      </View>
+    );
+  }
+
+  if (score.state === 'FAILED') {
+    return (
+      <View style={styles.action}>
+        <Notice
+          tone="error"
+          title="Scoring is temporarily unavailable"
+          action="Try again"
+          onAction={onCompute}
+        >
+          {score.message}
+        </Notice>
+      </View>
+    );
+  }
+
+  const insufficient = score.state === 'INSUFFICIENT_DATA';
+  const expired = score.state === 'EXPIRED';
+
+  return (
+    <View style={styles.action}>
+      <Button
+        label={
+          insufficient
+            ? 'Share more of your history'
+            : expired
+              ? 'Re-share your data'
+              : 'Share data to build your score'
+        }
+        icon="consent"
+        onPress={() => router.push(ROUTES.CONSENT.DASHBOARD)}
+      />
+      <Micro center>
+        {/* The server's own sentence where it has one: "we need at least two months of
+            transaction history" is actionable, and a generic line would throw it away. */}
+        {insufficient || expired
+          ? score.message
+          : 'Your identity is verified. A reputation score needs your financial history, shared through the Account Aggregator — and revocable at any time.'}
+      </Micro>
+    </View>
   );
 }
 
@@ -291,6 +435,13 @@ const styles = StyleSheet.create({
   // close to it because it is about it, and the sections below breathe apart.
   sheet: { gap: Space.xxl, paddingTop: Space.sm },
   action: { gap: Space.md, marginTop: -Space.sm },
+  /** A wait, not an action: it sits where the button would and says nothing to press. */
+  waiting: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Space.md,
+    marginTop: -Space.sm,
+  },
   /**
    * Sits tight under the plate — `marginTop` cancels the sheet's own gap, because this
    * caption is about the object above it rather than a section of its own. A hairline
@@ -303,6 +454,8 @@ const styles = StyleSheet.create({
     borderLeftWidth: StyleSheet.hairlineWidth,
     paddingLeft: Space.md,
   },
+  /** A titled section: the head, then the one object it names. */
+  block: { gap: Space.lg },
   links: { gap: Space.sm },
   linkOuter: { alignSelf: 'stretch' },
   link: {

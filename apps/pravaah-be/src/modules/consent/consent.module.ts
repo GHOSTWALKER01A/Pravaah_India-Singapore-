@@ -18,7 +18,7 @@ import { DataLifeService } from '@/modules/consent/services/data-life.service'
 import { DataSessionService } from '@/modules/consent/services/data-session.service'
 import { FiNormalizerService } from '@/modules/consent/services/fi-normalizer.service'
 import { FraudModule } from '@/modules/fraud/fraud.module'
-
+import { ScoringModule } from '@/modules/scoring/scoring.module'
 /**
  * M1 — Consent & Data Aggregation (Account Aggregator).
  *
@@ -40,7 +40,7 @@ import { FraudModule } from '@/modules/fraud/fraud.module'
    * scale, and it is invisible to the per-purpose duplicate check M1 already has — that
    * check stops the same purpose twice, not fifty different purposes from one device.
    */
-  imports: [PassportModule, FraudModule],
+  imports: [PassportModule, FraudModule, ScoringModule],
   controllers: [
     ConsentController,
     AaWebhookController,

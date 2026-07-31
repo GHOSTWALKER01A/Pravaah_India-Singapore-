@@ -44,7 +44,12 @@ export type ScoreState =
   | { state: 'INSUFFICIENT_DATA'; message: string; monthsCovered: number; coverage: number }
   | { state: 'PENDING'; scoreId: string; message: string }
   | { state: 'EXPIRED'; scoreId: string; expiredAt: Date | null; message: string }
-  | { state: 'FAILED'; scoreId: string; message: string }
+  /**
+   * `scoreId` is optional because a failure can happen BEFORE a row is claimed —
+   * no active model version, for instance. Sending an empty string instead would
+   * hand clients an id that resolves to nothing.
+   */
+  | { state: 'FAILED'; scoreId?: string; message: string }
 
 /**
  * M2 orchestrator: guards → assemble → cache → infer → explain → persist.
@@ -71,7 +76,24 @@ export class ScoringService {
   // ── read ──────────────────────────────────────────────────────────────────
   /**
    * The user's current score, or the honest state that explains its absence.
-   * Never computes: a GET must not silently spend an inference call.
+   *
+   * Does not recompute. There is ONE exception, and it is a repair rather than a
+   * recompute: a holder who is verified, has a live consent, and has NO score row
+   * at all gets one computed here, once.
+   *
+   * That state is reachable and used to be a dead end. Scoring is triggered by
+   * two events — data landing from the Account Aggregator, and a reviewer
+   * approving the identity — and both can miss. Data that arrived while the
+   * review was still open is refused (an unverified person cannot be scored), and
+   * an approval granted before any data was shared has nothing to score. A holder
+   * who hit either order was left looking at "not enough history yet" beside a
+   * bank account they had definitely linked, with no button anywhere that would
+   * produce the number they came for.
+   *
+   * It is bounded to at most one inference per holder rather than per read,
+   * because `compute` claims its row BEFORE calling the model: after this runs
+   * there is a score row in every outcome — computed, thin-file or failed — so
+   * the next read takes the normal path above.
    */
   async getCurrent(userId: string): Promise<ScoreState | Record<string, unknown>> {
     const latest = await this.prisma.score.findFirst({
@@ -93,19 +115,57 @@ export class ScoringService {
 
     if (!latest) {
       const consent = await this.activeConsent(userId)
-      return consent
-        ? {
-            state: 'INSUFFICIENT_DATA' as const,
+      if (!consent) {
+        return {
+          state: 'NO_CONSENT' as const,
+          message:
+            'Share your bank or GST data through the Account Aggregator to build your score.',
+        }
+      }
+
+      // Shared data, no score row: the trigger was missed. Repair it — see the
+      // method's note for why this is safe to do from a read.
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { kycStatus: true, isSuspended: true },
+      })
+      if (user?.kycStatus === KycStatus.VERIFIED && !user.isSuspended) {
+        this.logger.info(
+          '[getCurrent] Verified holder with shared data and no score — computing once',
+          { userId, consentId: consent.id },
+        )
+        try {
+          return await this.compute(userId)
+        } catch (e) {
+          this.logger.warn('[getCurrent] Repair compute failed', {
+            userId,
+            err: e,
+          })
+          /**
+           * Our problem, said as ours.
+           *
+           * The remaining throw here is `ServiceUnavailableException` — no active
+           * model version, or the inference rail refusing. Falling through to
+           * "there is not enough history yet" would blame the holder's data for a
+           * misconfiguration on our side, and send them back to a consent flow
+           * they have already completed. There is no score row to point at (the
+           * throw happened before one was claimed), so FAILED cannot carry an id.
+           */
+          return {
+            state: 'FAILED' as const,
             message:
-              'Your data is shared but there is not enough history yet to score it.',
-            monthsCovered: 0,
-            coverage: 0,
+              'Scoring is temporarily unavailable. Your data is safe and we will retry automatically.',
           }
-        : {
-            state: 'NO_CONSENT' as const,
-            message:
-              'Share your bank or GST data through the Account Aggregator to build your score.',
-          }
+        }
+      }
+
+      return {
+        state: 'INSUFFICIENT_DATA' as const,
+        message:
+          'Your data is shared but there is not enough history yet to score it.',
+        monthsCovered: 0,
+        coverage: 0,
+      }
     }
 
     switch (latest.status) {

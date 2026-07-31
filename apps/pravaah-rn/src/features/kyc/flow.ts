@@ -76,6 +76,33 @@ export function nextRoute(status: KycProfileStatus): Href {
   return next ? CHECK_ROUTE[next] : (ROUTES.KYC.STATUS as Href);
 }
 
+/**
+ * IN_REVIEW, but with nothing wrong — the profile is waiting only for a reviewer
+ * to approve it.
+ *
+ * One status token covers two situations that need different words. A holder
+ * whose documents disagreed is waiting while somebody adjudicates a discrepancy;
+ * a holder in this state did everything right and is queued. Telling the second
+ * group "a person is checking the details that did not match" invents a problem
+ * they do not have.
+ *
+ * ── Why this reads a server field instead of deriving it ──
+ * It is not derivable here, and both plausible derivations are wrong:
+ *
+ *   - "every required check PASSED" — a name-mismatch review has every check
+ *     passed too. That is the one case this must exclude.
+ *   - "nameMatchScore >= threshold" — a single-source profile stores 1.0 while
+ *     the backend's decision treated the score as unreconciled, so this gets
+ *     that case backwards. It would also mirror a policy constant.
+ *
+ * The server sends its own `machineCleared` verdict from the decision that
+ * produced the response, so the words shown here and the reason the reviewer
+ * sees cannot disagree. Absent (older API), we fall back to the cautious copy.
+ */
+export function awaitingApproval(status: KycProfileStatus): boolean {
+  return status.overallStatus === 'IN_REVIEW' && status.awaitingApproval === true;
+}
+
 /** Progress across the required steps for the current country. */
 export function progress(status: KycProfileStatus): {
   done: number;

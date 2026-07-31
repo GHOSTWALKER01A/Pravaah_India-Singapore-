@@ -18,7 +18,7 @@ import { useAuth } from '@/context/auth-context';
 import { CHECK_META } from '@/features/kyc/check-labels';
 import { KycStepList } from '@/features/kyc/components/kyc-step-list';
 import { PassportCard } from '@/features/kyc/components/passport-card';
-import { nextCheck, nextRoute } from '@/features/kyc/flow';
+import { awaitingApproval, nextCheck, nextRoute } from '@/features/kyc/flow';
 import { useKycStatus } from '@/features/kyc/use-kyc-status';
 import { Space } from '@/theme';
 
@@ -49,6 +49,7 @@ export default function KycStatusScreen() {
 
   const pending = status ? nextCheck(status) : null;
   const inReview = status?.overallStatus === 'IN_REVIEW';
+  const approvalPending = status ? awaitingApproval(status) : false;
   const rejected = status?.overallStatus === 'REJECTED';
 
   return (
@@ -93,10 +94,20 @@ export default function KycStatusScreen() {
                 />
               </View>
             ) : inReview ? (
-              <Notice tone="caution" title="With a reviewer">
-                Everything is submitted. A person is checking the details that did
-                not match exactly — usually a spelling difference between documents.
-                This screen updates by itself, so you can close the app.
+              /* Two different waits, and they must not share one sentence — see
+                 `awaitingApproval`. One is "you are queued", the other is "a
+                 discrepancy is being adjudicated", and inventing the second for
+                 the first group is what made a clean verification read as a
+                 problem. */
+              <Notice
+                tone="caution"
+                title={
+                  approvalPending ? 'Waiting for approval' : 'With a reviewer'
+                }
+              >
+                {approvalPending
+                  ? 'Every check has cleared. A reviewer signs off on each new passport before it is issued — usually within a day. This screen updates by itself, and we will notify you, so you can close the app.'
+                  : 'Everything is submitted. A person is checking the details that did not match exactly — usually a spelling difference between documents. This screen updates by itself, so you can close the app.'}
               </Notice>
             ) : rejected ? (
               <View style={styles.next}>

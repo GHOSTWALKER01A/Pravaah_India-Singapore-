@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { ApiError, passportService } from '@/api';
+import { ApiError, passportService, type PassportCardPayload } from '@/api';
 
 /**
  * The machine-readable face's state, as a closed set.
@@ -40,6 +40,13 @@ export type PassportCode =
       cardSerial: string;
       credentialNumber: string | null;
       expiresAt: string | null;
+      /**
+       * The whole card, so a surface that wants to DRAW the plastic — its
+       * artwork, its MRZ, its dates — does not spend a second request on the
+       * same endpoint. The verso needs none of this and ignores it; the passport
+       * tab renders the card's front face from it.
+       */
+      card: PassportCardPayload;
     }
   | {
       state: 'ERROR';
@@ -171,5 +178,6 @@ function describe(
     cardSerial: card.cardSerial,
     credentialNumber: card.credentialNumber,
     expiresAt: card.expiresAt,
+    card,
   };
 }

@@ -25,6 +25,7 @@ import {
 } from 'generated/prisma/client'
 
 import { ReviewEventsService } from '@/modules/kyc/admin/review-events.service'
+import { ScoringService } from '@/modules/scoring/services/scoring.service'
 import {
   CASE_DETAIL_INCLUDE,
   CASE_LIST_INCLUDE,
@@ -51,6 +52,7 @@ export class ReviewService {
     private readonly email: EmailService,
     private readonly push: PushService,
     private readonly sms: SmsService,
+    private readonly scoring: ScoringService,
     @Inject(APP_LOGGER) logger: AppLogger,
   ) {
     this.logger = logger.child({ context: ReviewService.name })
@@ -206,7 +208,41 @@ export class ReviewService {
     })
     void this.notifyUser(c.kycProfile.user, decision, notes)
 
+    if (decision === ReviewDecision.APPROVED) {
+      void this.scoreOnApproval(c.kycProfile.userId)
+    }
+
     return this.detail(id)
+  }
+
+  /**
+   * Score the holder now that they are verified.
+   *
+   * The reason this exists at all is an ORDERING gap. `ScoringService.compute`
+   * refuses anyone who is not VERIFIED, and M1 computes a score when Account
+   * Aggregator data lands — so a user who shared their data while waiting for
+   * this decision was refused at fetch time and had nothing to re-trigger it.
+   * They sat on a verified passport with no score and no button that would
+   * produce one. Approval is the other half of that pair.
+   *
+   * Fire-and-forget, and deliberately swallowing: `compute` returns a NO_CONSENT
+   * state rather than throwing when the user has shared nothing yet (the common
+   * case — most people verify first), and no scoring failure may ever undo a
+   * decision that is already recorded and already notified.
+   */
+  private async scoreOnApproval(userId: string): Promise<void> {
+    try {
+      const result = await this.scoring.compute(userId)
+      this.logger.info(`[${this.scoreOnApproval.name}] Post-approval scoring`, {
+        userId,
+        state: (result as { state?: string }).state ?? 'COMPUTED',
+      })
+    } catch (e) {
+      this.logger.warn(
+        `[${this.scoreOnApproval.name}] Post-approval scoring failed`,
+        { userId, err: e },
+      )
+    }
   }
 
   private async notifyUser(

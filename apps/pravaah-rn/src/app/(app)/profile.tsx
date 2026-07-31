@@ -18,10 +18,24 @@ import { PravaahIdCard } from '@/components/common/pravaah-id-card';
 import { ROUTES } from '@/constants/routes.constants';
 import { APP_NAME } from '@/constants/ui.constants';
 import { useAuth } from '@/context/auth-context';
+import { awaitingApproval } from '@/features/kyc/flow';
+import { useKycStatus } from '@/features/kyc/use-kyc-status';
 import { Radius, Space, usePalette } from '@/theme';
 
 export default function ProfileScreen() {
   const { user, logout } = useAuth();
+  /**
+   * The LIVE status, not `user.kycStatus`.
+   *
+   * The auth context's copy is written once — at sign-in or session restore —
+   * and nothing ever updates it (`setKycStatus` has no callers). So this screen
+   * showed whatever was true the last time the user signed in: it said IN
+   * PROGRESS next to a passport that said VERIFIED, from the same account, on
+   * the same phone. `GET /kyc/status` is the canonical shape every other surface
+   * renders from, and this row is now one of them.
+   */
+  const { status } = useKycStatus({ pollMs: 10_000 });
+  const kycStatus = status?.overallStatus ?? user?.kycStatus ?? 'NOT_STARTED';
   const p = usePalette();
   const [busy, setBusy] = useState(false);
   const [imageUri, setImageUri] = useState<string | null>(null);
@@ -99,12 +113,16 @@ export default function ProfileScreen() {
               icon="verify"
               title="Verification"
               detail={
-                user?.kycStatus === 'VERIFIED'
+                kycStatus === 'VERIFIED'
                   ? 'Your identity is verified'
-                  : 'Open the checks and see what is left'
+                  : status && awaitingApproval(status)
+                    ? 'Every check cleared — a reviewer is signing it off'
+                    : kycStatus === 'REJECTED'
+                      ? 'Declined — open it to see which check did not clear'
+                      : 'Open the checks and see what is left'
               }
               onPress={() => router.push(ROUTES.KYC.STATUS)}
-              value={<StatusMark status={user?.kycStatus ?? 'NOT_STARTED'} />}
+              value={<StatusMark status={kycStatus} />}
             />
             <ControlRow
               icon="reputation"

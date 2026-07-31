@@ -45,6 +45,15 @@ export interface KycProfileStatus {
   nameMatchScore?: number | null;
   riskScore?: number | null;
   completedAt?: string | null;
+  /**
+   * IN_REVIEW with nothing wrong — queued for routine approval rather than being
+   * adjudicated. Server-sent because it is NOT derivable here; see
+   * `awaitingApproval` in `features/kyc/flow.ts`.
+   *
+   * Optional so an app build older than the field degrades to the cautious copy
+   * ("with a reviewer") instead of crashing on a missing property.
+   */
+  awaitingApproval?: boolean;
   checks: KycCheck[];
 }
 

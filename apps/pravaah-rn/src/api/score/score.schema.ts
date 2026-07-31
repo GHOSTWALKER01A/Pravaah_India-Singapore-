@@ -87,7 +87,11 @@ export type ScoreState =
       expiredAt: string | null;
       message: string;
     }
-  | { state: 'FAILED'; scoreId: string; message: string };
+  /**
+   * `scoreId` is absent when the failure happened before a score row was claimed
+   * (e.g. no active model version) — see the backend's `ScoreState`.
+   */
+  | { state: 'FAILED'; scoreId?: string; message: string };
 
 export type ScoreResult = ComputedScore | ScoreState;
 

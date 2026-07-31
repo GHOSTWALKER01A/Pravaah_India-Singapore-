@@ -85,6 +85,10 @@ export function ScoreTeaser({ score }: { score: ScoreResult }) {
           // non-computed states are the only ones that carry `message`.
           !isComputedScore(score) && (
             <>
+              {/* NO_CONSENT and INSUFFICIENT_DATA are NOT the same sentence: one has
+                  shared nothing, the other shared too little. They used to share
+                  "Not enough history to score yet", which told a holder who had never
+                  connected an account that their history was thin. */}
               <Text role="title">
                 {score.state === 'PENDING'
                   ? 'Working out your score'
@@ -92,7 +96,9 @@ export function ScoreTeaser({ score }: { score: ScoreResult }) {
                     ? 'Your score has expired'
                     : score.state === 'FAILED'
                       ? 'Scoring is temporarily unavailable'
-                      : 'Not enough history to score yet'}
+                      : score.state === 'NO_CONSENT'
+                        ? 'Not scored yet'
+                        : 'Not enough history to score yet'}
               </Text>
               <Micro tone="dim">{score.message}</Micro>
             </>

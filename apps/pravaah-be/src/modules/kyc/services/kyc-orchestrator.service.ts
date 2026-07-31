@@ -16,12 +16,17 @@ import {
   Country,
   KycStatus,
   Prisma,
+  ReviewDecision,
+  ReviewStatus,
 } from 'generated/prisma/client'
 
 import {
+  applyReviewDecision,
   evaluateKyc,
   NAME_MATCH_THRESHOLD,
   REQUIRED_CHECKS,
+  type KycDecision,
+  type RecordedReview,
 } from '@/modules/kyc/kyc.state'
 import { NameMatchService } from '@/modules/kyc/services/name-match.service'
 
@@ -33,6 +38,32 @@ export interface CheckOutcome {
   raw?: unknown
 }
 
+/** How long a reviewer has to answer a case, from the moment it opens. */
+const REVIEW_SLA_MS = 24 * 3600_000
+
+/**
+ * The minimum a check row has to carry for the decision logic to read it.
+ *
+ * Declared structurally rather than as the Prisma row type so `evaluate` can be
+ * handed any projection — the full row when the DTO needs the provider fields,
+ * a narrow select when only the decision matters — and still hand back a
+ * correctly-typed latest-attempt map.
+ */
+interface EvaluableCheck {
+  checkType: CheckType
+  status: CheckStatus
+  attempt: number
+  extractedName: string | null
+  updatedAt: Date
+}
+
+/** The part of a review case that changes the outcome. */
+interface ReviewCaseFacts {
+  status: ReviewStatus
+  decision: ReviewDecision | null
+  resolvedAt: Date | null
+}
+
 /** Canonical KYC status returned to the client apps (RN/admin). */
 export interface KycProfileStatusDto {
   overallStatus: KycStatus
@@ -42,6 +73,21 @@ export interface KycProfileStatusDto {
   riskScore: number | null
   completedAt: string | null
   nextStep: CheckType | null
+  /**
+   * IN_REVIEW with nothing wrong — queued for routine approval rather than being
+   * adjudicated.
+   *
+   * Sent because the client CANNOT derive it. "Every check passed" is not the
+   * same predicate: a profile whose documents disagree also has every check
+   * passed, and it is the one case this flag must exclude. Nor does
+   * `nameMatchScore` settle it — a single-source profile stores 1.0 here while
+   * the decision treated the score as unreconciled (see `evaluate`), so a client
+   * comparing it against the threshold gets that case backwards.
+   *
+   * It is `machineCleared` from the decision this response was computed from, so
+   * the words the app shows and the reason the reviewer sees cannot disagree.
+   */
+  awaitingApproval: boolean
   checks: {
     checkType: CheckType
     status: CheckStatus
@@ -205,40 +251,27 @@ export class KycOrchestratorService {
     return this.reevaluate(userId)
   }
 
-  /** Recompute status from all checks + name reconciliation. */
-  async reevaluate(
-    userId: string,
-  ): Promise<{ status: KycStatus; reason?: string }> {
+  /**
+   * Recompute status from all checks + name reconciliation + the review decision
+   * on file, and persist it.
+   *
+   * The composition is the point: see {@link evaluate}. This is still the only
+   * path that writes `User.kycStatus` from check data, and it is now idempotent
+   * for an admin-decided profile — calling it a hundred times after an approval
+   * re-derives VERIFIED a hundred times rather than walking the holder back into
+   * the queue.
+   */
+  async reevaluate(userId: string): Promise<KycDecision> {
     const user = await this.prisma.user.findUnique({ where: { id: userId } })
     const profile = await this.prisma.kycProfile.findUnique({
       where: { userId },
-      include: { checks: true },
+      include: { checks: true, reviewCase: true },
     })
     if (!user || !profile) {
       throw new NotFoundException('KYC profile missing')
     }
 
-    // Latest attempt per check type wins.
-    const latest = new Map<CheckType, CheckStatus>()
-    for (const c of [...profile.checks].sort((a, b) => a.attempt - b.attempt)) {
-      latest.set(c.checkType, c.status)
-    }
-
-    const names = profile.checks
-      .filter((c) => c.extractedName)
-      .map((c) => c.extractedName as string)
-    const { score, canonical } = this.nameMatch.reconcile(names)
-
-    const sanctionsHit =
-      latest.get(CheckType.SANCTIONS_PEP) === CheckStatus.FAILED
-
-    const decision = evaluateKyc({
-      requiredForCountry: REQUIRED_CHECKS[user.primaryCountry],
-      checks: [...latest].map(([type, status]) => ({ type, status })),
-      nameMatchScore: names.length >= 2 ? score : null,
-      sanctionsHit,
-      threshold: NAME_MATCH_THRESHOLD,
-    })
+    const { decision, machine, score, canonical } = this.evaluate(user, profile)
 
     await this.prisma.kycProfile.update({
       where: { userId },
@@ -246,7 +279,16 @@ export class KycOrchestratorService {
         overallStatus: decision.status,
         nameMatchScore: score,
         verifiedName: canonical || null,
-        completedAt: decision.status === KycStatus.VERIFIED ? new Date() : null,
+        /**
+         * Stamped once and then preserved. `new Date()` unconditionally would
+         * move the completion time forward on every re-derivation — and this
+         * runs on every check AND every status read — so the one timestamp that
+         * says when this identity was verified would always read "just now".
+         */
+        completedAt:
+          decision.status === KycStatus.VERIFIED
+            ? (profile.completedAt ?? new Date())
+            : null,
       },
     })
     await this.prisma.user.update({
@@ -258,28 +300,236 @@ export class KycOrchestratorService {
       userId,
       status: decision.status,
       reason: decision.reason,
+      machineStatus: machine.status,
       nameMatchScore: score,
     })
 
-    // Open a review case when (and only when) we land in review — idempotent.
+    // A review case exists exactly while a person still owes us a decision.
     if (decision.status === KycStatus.IN_REVIEW) {
-      const reviewCase = await this.prisma.reviewCase.upsert({
+      await this.syncReviewCase(profile.id, machine.reason ?? 'Ambiguous')
+    } else if (
+      profile.reviewCase &&
+      profile.reviewCase.decision &&
+      profile.reviewCase.resolvedAt &&
+      profile.reviewCase.status !== ReviewStatus.RESOLVED
+    ) {
+      /**
+       * A row the old reopen path mangled: decided, yet marked OPEN.
+       *
+       * The decision above already honours it — see `recordedReview` — so the
+       * holder is unblocked either way. This repairs the QUEUE, which otherwise
+       * shows an analyst an open case that has already been answered and cannot
+       * be claimed (the reopen left `assignedAdminId` set, and `claim` requires
+       * it to be null).
+       */
+      await this.prisma.reviewCase.update({
         where: { kycProfileId: profile.id },
-        create: {
-          kycProfileId: profile.id,
-          reason: decision.reason ?? 'Ambiguous',
-          slaDueAt: new Date(Date.now() + 24 * 3600_000),
-        },
-        update: { reason: decision.reason ?? 'Ambiguous', status: 'OPEN' },
+        data: { status: ReviewStatus.RESOLVED },
       })
-      // Push the new/reopened case to any live admin console (fire-and-forget).
-      void this.events.publish({
-        type: 'OPENED',
-        caseId: reviewCase.id,
-        status: 'OPEN',
-      })
+      this.logger.warn(
+        `[${this.reevaluate.name}] Repaired a decided case still marked open`,
+        { userId, decision: profile.reviewCase.decision },
+      )
     }
     return decision
+  }
+
+  /**
+   * The composed verdict: what the checks say, then what the reviewer said.
+   *
+   * Shared by `reevaluate` (which writes it) and `getProfileStatus` (which
+   * compares against it before healing). They MUST agree — when they did not,
+   * every poll of `GET /kyc/status` saw a "mismatch" between the machine's
+   * IN_REVIEW and the admin's VERIFIED, healed it by re-running the machine, and
+   * so undid the approval within seconds of it being granted.
+   *
+   * Generic in the check row so both callers can pass whatever projection they
+   * already have and still get the fully-typed latest-attempt map back.
+   */
+  private evaluate<C extends EvaluableCheck>(
+    user: { primaryCountry: Country },
+    profile: {
+      checks: C[]
+      reviewCase: ReviewCaseFacts | null
+    } | null,
+  ): {
+    decision: KycDecision
+    /** The machine's own verdict, before the reviewer's answer is applied. */
+    machine: KycDecision
+    /** Latest attempt per check type — what both the DTO and the decision read. */
+    latest: Map<CheckType, C>
+    score: number
+    canonical: string
+  } {
+    const checks = profile?.checks ?? []
+
+    // Latest attempt per check type wins.
+    const latest = new Map<CheckType, C>()
+    for (const c of [...checks].sort((a, b) => a.attempt - b.attempt)) {
+      latest.set(c.checkType, c)
+    }
+
+    // Every attempt contributes a name, not just the latest: reconciliation is
+    // about whether the sources agree, and a superseded attempt still came from
+    // a source.
+    const names = checks
+      .filter((c) => c.extractedName)
+      .map((c) => c.extractedName as string)
+    const { score, canonical } = this.nameMatch.reconcile(names)
+
+    const machine = evaluateKyc({
+      requiredForCountry: REQUIRED_CHECKS[user.primaryCountry],
+      checks: [...latest.values()].map((c) => ({
+        type: c.checkType,
+        status: c.status,
+      })),
+      nameMatchScore: names.length >= 2 ? score : null,
+      sanctionsHit:
+        latest.get(CheckType.SANCTIONS_PEP)?.status === CheckStatus.FAILED,
+      threshold: NAME_MATCH_THRESHOLD,
+    })
+
+    const decision = applyReviewDecision(
+      machine,
+      /**
+       * Staleness is measured against the LATEST attempts only — the exact rows
+       * the verdict above was computed from — never against every historical row.
+       *
+       * A superseded attempt cannot change the decision, so it must not be able
+       * to invalidate an approval. `KycPollerService` expires any check left
+       * PENDING for 30 minutes, and `updatedAt` is `@updatedAt`, so that sweep
+       * touches abandoned attempts: a holder who abandoned Aadhaar once and
+       * passed it on the retry would have been silently thrown back into review
+       * the first time the poller ran after their approval.
+       */
+      this.recordedReview(profile?.reviewCase ?? null, [...latest.values()]),
+    )
+    return { decision, machine, latest, score, canonical }
+  }
+
+  /**
+   * The reviewer's answer, and whether it still covers this profile.
+   *
+   * A decision goes stale the moment decision-relevant evidence changes after it
+   * — see `RecordedReview` and the call site above for which rows count.
+   * Compared against `updatedAt` rather than `createdAt` because a provider
+   * callback can flip an existing attempt from PENDING to PASSED in place, and
+   * that is new evidence too.
+   */
+  private recordedReview(
+    reviewCase: ReviewCaseFacts | null,
+    checks: EvaluableCheck[],
+  ): RecordedReview | null {
+    /**
+     * Keyed off `decision` + `resolvedAt`, deliberately NOT off `status`.
+     *
+     * Those two fields are written by exactly one thing — `ReviewService.decide`,
+     * which writes both atomically — so their presence IS a recorded decision.
+     * `status` is written by several paths, one of which (the old blanket reopen
+     * this file used to do) forced it back to OPEN while leaving the decision in
+     * place. Trusting `status` would discard real approvals sitting in rows that
+     * bug produced. A case this file reopens has its decision fields CLEARED, so
+     * a genuinely reopened case is correctly read as undecided.
+     */
+    if (!reviewCase?.decision || !reviewCase.resolvedAt) {
+      return null
+    }
+    const latestCheckAt = checks.reduce<number>(
+      (max, c) => Math.max(max, c.updatedAt.getTime()),
+      0,
+    )
+    return {
+      decision: reviewCase.decision,
+      stale:
+        reviewCase.resolvedAt !== null &&
+        latestCheckAt > reviewCase.resolvedAt.getTime(),
+    }
+  }
+
+  /**
+   * Put a case in front of a reviewer, without ever disturbing one they are
+   * already holding.
+   *
+   * The previous `upsert` forced `status: 'OPEN'` on every re-derivation, which
+   * had two bugs. It yanked a CLAIMED case out from under the reviewer working
+   * it; and when it reopened a RESOLVED case it left `assignedAdminId` set, so
+   * `claim` (which requires `assignedAdminId: null`) could never succeed again
+   * and the case was stuck permanently unclaimable.
+   */
+  private async syncReviewCase(
+    profileId: string,
+    reason: string,
+  ): Promise<void> {
+    const existing = await this.prisma.reviewCase.findUnique({
+      where: { kycProfileId: profileId },
+    })
+
+    if (!existing) {
+      const created = await this.prisma.reviewCase.create({
+        data: {
+          kycProfileId: profileId,
+          reason,
+          slaDueAt: new Date(Date.now() + REVIEW_SLA_MS),
+        },
+      })
+      void this.events.publish({
+        type: 'OPENED',
+        caseId: created.id,
+        status: 'OPEN',
+      })
+      return
+    }
+
+    /**
+     * "Has this case been answered" is `decision` + `resolvedAt`, not `status` —
+     * the same rule `recordedReview` applies, and for the same reason: only
+     * `ReviewService.decide` writes those two, while `status` was rewritten by
+     * the old blanket reopen. A row left OPEN-but-decided by that bug is
+     * ANSWERED, and must take the full reopen below; treating it as live would
+     * refresh its reason and leave `assignedAdminId` set, which is precisely the
+     * permanently-unclaimable state this method exists to prevent.
+     */
+    const answered = existing.decision !== null && existing.resolvedAt !== null
+
+    // Genuinely live (OPEN or CLAIMED, undecided) — the reason may have moved on
+    // as later checks landed, but the assignment must not.
+    if (!answered) {
+      if (existing.reason !== reason) {
+        await this.prisma.reviewCase.update({
+          where: { id: existing.id },
+          data: { reason },
+        })
+      }
+      return
+    }
+
+    /**
+     * Answered, yet we are back in review: the evidence changed after the
+     * decision, so it no longer covers this profile. Reopened as a genuinely
+     * fresh case — unassigned, with the old decision cleared — because the
+     * next reviewer must not inherit a verdict passed on different evidence.
+     */
+    await this.prisma.reviewCase.update({
+      where: { id: existing.id },
+      data: {
+        status: ReviewStatus.OPEN,
+        reason,
+        decision: null,
+        decisionNotes: null,
+        resolvedAt: null,
+        assignedAdminId: null,
+        slaDueAt: new Date(Date.now() + REVIEW_SLA_MS),
+      },
+    })
+    this.logger.info(
+      `[${this.syncReviewCase.name}] Resolved case reopened — checks changed after the decision`,
+      { caseId: existing.id, reason },
+    )
+    void this.events.publish({
+      type: 'OPENED',
+      caseId: existing.id,
+      status: 'OPEN',
+    })
   }
 
   /** Source of truth for the app: current status + the exact next step. */
@@ -317,21 +567,27 @@ export class KycOrchestratorService {
 
     const profile = await this.prisma.kycProfile.findUnique({
       where: { userId },
-      include: { checks: true },
+      include: { checks: true, reviewCase: true },
     })
 
-    // Latest attempt per check type.
-    const latest = new Map<
-      CheckType,
-      NonNullable<typeof profile>['checks'][number]
-    >()
-    for (const c of [...(profile?.checks ?? [])].sort(
-      (a, b) => a.attempt - b.attempt,
-    )) {
-      latest.set(c.checkType, c)
-    }
-
     const required = REQUIRED_CHECKS[user.primaryCountry]
+
+    /**
+     * ── EDGE CASE HEALING ──────────────────────────────────────────────────
+     * If a user was seeded incorrectly, or their profile/checks were wiped while
+     * `User.kycStatus` stayed VERIFIED, the UI goes inconsistent — a VERIFIED
+     * seal above zero cleared checks and no verified name. So the true status is
+     * derived here and the DB is healed if it drifted.
+     *
+     * It derives the COMPOSED status (checks + the reviewer's decision), not the
+     * machine's verdict alone. That distinction is the whole bug this healing
+     * used to cause: the machine can never answer VERIFIED, so an approved
+     * holder looked like permanent drift, and every poll of this endpoint —
+     * every 8 seconds from the passport screen — "healed" their approval away
+     * and reopened their review case.
+     */
+    const { decision, machine, latest } = this.evaluate(user, profile)
+
     const passed = new Set(
       [...latest.values()]
         .filter((c) => c.status === CheckStatus.PASSED)
@@ -339,36 +595,22 @@ export class KycOrchestratorService {
     )
     const nextStep = required.find((t) => !passed.has(t)) ?? null
 
-    // ── EDGE CASE HEALING ────────────────────────────────────────────────────
-    // If a user was seeded incorrectly, or their profile/checks were wiped 
-    // while their User.kycStatus remained VERIFIED, the UI becomes inconsistent
-    // (showing VERIFIED badge but 0 checks cleared and missing verifiedName).
-    // We compute the true status on the fly and heal the DB if it drifted.
-    const sanctionsHit =
-      latest.get(CheckType.SANCTIONS_PEP)?.status === CheckStatus.FAILED
-
-    const names = (profile?.checks ?? [])
-      .filter((c) => c.extractedName)
-      .map((c) => c.extractedName as string)
-    const { score } = this.nameMatch.reconcile(names)
-
-    const decision = evaluateKyc({
-      requiredForCountry: required,
-      checks: [...latest.values()].map((c) => ({
-        type: c.checkType,
-        status: c.status,
-      })),
-      nameMatchScore: names.length >= 2 ? score : null,
-      sanctionsHit,
-      threshold: NAME_MATCH_THRESHOLD,
-    })
-
     let overallStatus = user.kycStatus
     let verifiedName = profile?.verifiedName ?? null
     let nameMatchScore = profile?.nameMatchScore ?? null
     let completedAt = profile?.completedAt?.toISOString() ?? null
 
-    if (decision.status !== user.kycStatus) {
+    /**
+     * NOT_STARTED is a real state that `evaluateKyc` cannot express — with no
+     * checks recorded it can only report IN_PROGRESS ("awaiting everything"). So
+     * a user who has never touched KYC is left alone; healing them would flip
+     * them to IN_PROGRESS on their first status read and the passport screen
+     * would offer to "continue" a verification they never began.
+     */
+    const untouched =
+      latest.size === 0 && user.kycStatus === KycStatus.NOT_STARTED
+
+    if (!untouched && decision.status !== user.kycStatus) {
       this.logger.warn(`[getProfileStatus] State mismatch detected, healing`, {
         userId,
         dbStatus: user.kycStatus,
@@ -398,6 +640,18 @@ export class KycOrchestratorService {
       riskScore: profile?.riskScore ?? null,
       completedAt,
       nextStep,
+      /**
+       * Composed status IN_REVIEW *and* the machine had no objection.
+       *
+       * Read off the pre-heal decision deliberately: healing re-derives from the
+       * same inputs, so it persists this verdict rather than changing it — and
+       * `applyReviewDecision` drops `machineCleared` once a reviewer's answer is
+       * folded in, which is correct (an answered case is not awaiting an answer)
+       * but means the flag has to come from `machine`.
+       */
+      awaitingApproval:
+        decision.status === KycStatus.IN_REVIEW &&
+        machine.machineCleared === true,
       checks: [...latest.values()].map((c) => ({
         checkType: c.checkType,
         status: c.status,

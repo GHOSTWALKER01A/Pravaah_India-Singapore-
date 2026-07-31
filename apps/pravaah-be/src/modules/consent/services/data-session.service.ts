@@ -20,6 +20,7 @@ import { AaProviderRegistry } from '@/modules/consent/providers/aa/aa-registry'
 import { decryptFi, type KeyMaterial } from '@/modules/consent/providers/aa/aa-crypto.util'
 import { canFetch } from '@/modules/consent/consent.state'
 import { FiNormalizerService } from '@/modules/consent/services/fi-normalizer.service'
+import { ScoringService } from '@/modules/scoring/services/scoring.service'
 
 @Injectable()
 export class DataSessionService {
@@ -29,6 +30,7 @@ export class DataSessionService {
     private readonly registry: AaProviderRegistry,
     private readonly prisma: PrismaService,
     private readonly normalizer: FiNormalizerService,
+    private readonly scoringService: ScoringService,
     @Inject(APP_LOGGER) logger: AppLogger,
   ) {
     this.logger = logger.child({ context: DataSessionService.name })
@@ -181,6 +183,41 @@ export class DataSessionService {
       status,
       stored,
     })
+
+    /**
+     * The data has landed, so score it — this is the whole reason the holder
+     * shared it, and asking them to press a second button for the number they
+     * came for is a dead end they would not find.
+     *
+     * PARTIAL counts. The thin-file gate inside `compute` is the thing that
+     * decides whether there is enough to score; refusing to even ask because one
+     * FIP of three timed out would leave a scoreable holder unscored.
+     *
+     * Never allowed to fail the fetch. The most common refusal here is entirely
+     * expected — `compute` rejects anyone not yet VERIFIED, and a holder can
+     * share data while their review is still open — so the other half of this
+     * pair lives in `ReviewService`, which computes on approval. Between them,
+     * either order of (share data, get approved) ends with a score.
+     */
+    if (
+      status === DataSessionStatus.COMPLETED ||
+      status === DataSessionStatus.PARTIAL
+    ) {
+      await this.scoringService
+        .compute(session.consent.userId)
+        .then((result) => {
+          this.logger.info('[fetchAndStore] Post-fetch scoring', {
+            userId: session.consent.userId,
+            state: (result as { state?: string }).state ?? 'COMPUTED',
+          })
+        })
+        .catch((e) => {
+          this.logger.warn('[fetchAndStore] Post-fetch scoring skipped', {
+            userId: session.consent.userId,
+            err: e,
+          })
+        })
+    }
   }
 
   /**

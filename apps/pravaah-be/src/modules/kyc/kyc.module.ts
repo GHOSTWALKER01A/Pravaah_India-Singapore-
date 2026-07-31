@@ -34,9 +34,18 @@ import { PanService } from '@/modules/kyc/services/pan.service'
 import { SanctionsService } from '@/modules/kyc/services/sanctions.service'
 import { SingpassService } from '@/modules/kyc/services/singpass.service'
 import { KycWebhookController } from '@/modules/kyc/webhook.controller'
+import { ScoringModule } from '@/modules/scoring/scoring.module'
 
 @Module({
-  imports: [PassportModule, SupabaseModule],
+  /**
+   * `ScoringModule` is imported for ONE thing: an approval is the moment a
+   * holder becomes scoreable, so `ReviewService` computes their score there.
+   *
+   * The dependency points this way, and not the other, on purpose — M2 refuses
+   * to score an unverified person, so scoring already depends on the KYC state
+   * but not on the KYC module. Nothing in M2 imports M0, so there is no cycle.
+   */
+  imports: [PassportModule, SupabaseModule, ScoringModule],
   controllers: [
     KycController,
     AdminAuthController,

@@ -23,6 +23,7 @@ import { CHECK_META } from '@/features/kyc/check-labels';
 import { CorridorPlate } from '@/features/kyc/components/country-card';
 import {
   REQUIRED_CHECKS,
+  awaitingApproval,
   nextCheck,
   nextRoute,
   progress,
@@ -108,6 +109,7 @@ export default function VerifyScreen() {
   const inReview = overall === 'IN_REVIEW';
   const rejected = overall === 'REJECTED';
   const verified = overall === 'VERIFIED';
+  const approvalPending = status ? awaitingApproval(status) : false;
   const { done, total } = status ? progress(status) : { done: 0, total: 0 };
   const pending = status ? nextCheck(status) : null;
 
@@ -127,7 +129,7 @@ export default function VerifyScreen() {
           title={verified ? 'Identity verified' : inFlight ? 'Pick up where you left off' : 'Get verified'}
           lede={
             verified
-              ? 'Every required check on your corridor has cleared. Your passport is active.'
+              ? 'Every required check on your corridor has cleared, and a reviewer has approved it. Your passport is active.'
               : inReview
                 ? 'Everything is submitted. A reviewer is looking at it now.'
                 : 'One identity, checked once, carried across the corridor. Progress saves as you go — you can stop and come back.'
@@ -186,16 +188,21 @@ export default function VerifyScreen() {
           </Panel>
         ) : null}
 
+        {/* Two different waits behind one status token — see `awaitingApproval`. Every
+            new passport is signed off by a person, so the common case is "you are
+            queued"; the other is "your documents disagreed and somebody is
+            adjudicating". Telling the first group about a mismatch invents a problem
+            they do not have. */}
         {inReview ? (
           <Notice
             tone="caution"
-            title="With a reviewer"
+            title={approvalPending ? 'Waiting for approval' : 'With a reviewer'}
             action="See every check"
             onAction={() => router.push(ROUTES.KYC.STATUS)}
           >
-            A name that does not match exactly goes to a person rather than being
-            auto-declined. Your passport updates here the moment there is a
-            decision — you do not need to keep this open.
+            {approvalPending
+              ? 'Every check has cleared. A reviewer signs off on each new passport before it is issued — usually within a day. Your passport updates here the moment there is a decision, so you do not need to keep this open.'
+              : 'A name that does not match exactly goes to a person rather than being auto-declined. Your passport updates here the moment there is a decision — you do not need to keep this open.'}
           </Notice>
         ) : null}
 
