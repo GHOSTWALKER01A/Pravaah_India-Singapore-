@@ -6,6 +6,8 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
+    "deps:build": "npm run build --prefix ../../packages/pravaah-schema && npm run build --prefix ../../packages/nestjs-logger",
+    "prebuild": "npm run deps:build",
     "build": "npm run prisma:generate && nest build",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
