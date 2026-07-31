@@ -1,17 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "npx turbo run build --filter=parvaah-be",
-  "outputDirectory": "public",
-  "functions": {
-    "api/index.js": {
-      "maxDuration": 60,
-      "includeFiles": "dist/**"
-    }
-  },
-  "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/api"
-    }
-  ]
+  "outputDirectory": "dist"
 }
