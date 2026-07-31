@@ -34,15 +34,18 @@ $ npm install
 ## Compile and run the project
 
 ```bash
-# development
-$ npm run start
+# development (watch mode)
+$ npm run dev
 
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+# production — runs the compiled output, so build first
+$ npm run build
+$ npm start
 ```
+
+`npm start` deliberately runs `node dist/src/main` rather than `nest start`. Hosts
+that boot a container default to `npm start`, and `nest start` recompiles the whole
+project on every boot — which needs the dev dependencies at runtime and exhausts the
+heap on a small instance.
 
 ## Run tests
 
