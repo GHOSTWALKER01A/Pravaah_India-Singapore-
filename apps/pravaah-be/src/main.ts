@@ -42,6 +42,13 @@ async function bootstrap(): Promise<void> {
     defaultVersion: '1',
   })
 
+  // Nest only listens for SIGTERM/SIGINT once this is called. Without it, a
+  // container restart kills the process outright and `PrismaService.onModuleDestroy`
+  // never runs — abandoning up to `connection_limit` Postgres connections per
+  // instance, which then linger server-side until Postgres times them out. Hosts
+  // redeploy and restart constantly, so those leaks accumulate.
+  app.enableShutdownHooks()
+
   // Vercel's NestJS runtime waits for the server to listen on PORT, so this file
   // stays the single entrypoint for local, container and serverless deploys alike.
   const port = Number(process.env.PORT ?? 8000)
