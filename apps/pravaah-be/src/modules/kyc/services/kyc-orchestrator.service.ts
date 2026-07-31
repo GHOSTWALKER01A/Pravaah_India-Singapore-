@@ -339,13 +339,64 @@ export class KycOrchestratorService {
     )
     const nextStep = required.find((t) => !passed.has(t)) ?? null
 
+    // ── EDGE CASE HEALING ────────────────────────────────────────────────────
+    // If a user was seeded incorrectly, or their profile/checks were wiped 
+    // while their User.kycStatus remained VERIFIED, the UI becomes inconsistent
+    // (showing VERIFIED badge but 0 checks cleared and missing verifiedName).
+    // We compute the true status on the fly and heal the DB if it drifted.
+    const sanctionsHit =
+      latest.get(CheckType.SANCTIONS_PEP)?.status === CheckStatus.FAILED
+
+    const names = (profile?.checks ?? [])
+      .filter((c) => c.extractedName)
+      .map((c) => c.extractedName as string)
+    const { score } = this.nameMatch.reconcile(names)
+
+    const decision = evaluateKyc({
+      requiredForCountry: required,
+      checks: [...latest.values()].map((c) => ({
+        type: c.checkType,
+        status: c.status,
+      })),
+      nameMatchScore: names.length >= 2 ? score : null,
+      sanctionsHit,
+      threshold: NAME_MATCH_THRESHOLD,
+    })
+
+    let overallStatus = user.kycStatus
+    let verifiedName = profile?.verifiedName ?? null
+    let nameMatchScore = profile?.nameMatchScore ?? null
+    let completedAt = profile?.completedAt?.toISOString() ?? null
+
+    if (decision.status !== user.kycStatus) {
+      this.logger.warn(`[getProfileStatus] State mismatch detected, healing`, {
+        userId,
+        dbStatus: user.kycStatus,
+        computedStatus: decision.status,
+      })
+      // Ensure profile exists before reevaluating, otherwise reevaluate throws
+      if (!profile) {
+        await this.getOrCreateProfile(userId)
+      }
+      // Heal the database
+      const fixed = await this.reevaluate(userId)
+      overallStatus = fixed.status
+      // Re-fetch the healed profile to get updated verifiedName and completedAt
+      const healedProfile = await this.prisma.kycProfile.findUnique({
+        where: { userId },
+      })
+      verifiedName = healedProfile?.verifiedName ?? null
+      nameMatchScore = healedProfile?.nameMatchScore ?? null
+      completedAt = healedProfile?.completedAt?.toISOString() ?? null
+    }
+
     return {
-      overallStatus: user.kycStatus,
+      overallStatus,
       country: user.primaryCountry,
-      verifiedName: profile?.verifiedName ?? null,
-      nameMatchScore: profile?.nameMatchScore ?? null,
+      verifiedName,
+      nameMatchScore,
       riskScore: profile?.riskScore ?? null,
-      completedAt: profile?.completedAt?.toISOString() ?? null,
+      completedAt,
       nextStep,
       checks: [...latest.values()].map((c) => ({
         checkType: c.checkType,
