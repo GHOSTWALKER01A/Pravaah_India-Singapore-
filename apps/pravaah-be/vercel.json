@@ -5,7 +5,7 @@
   "functions": {
     "api/index.js": {
       "maxDuration": 60,
-      "includeFiles": "{apps/pravaah-be/dist,packages/*/dist}/**"
+      "includeFiles": "dist/**"
     }
   },
   "rewrites": [

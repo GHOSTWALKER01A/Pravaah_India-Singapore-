@@ -3,8 +3,8 @@
  *
  * Vercel's Node runtime transpiles a TypeScript entrypoint *in place* with
  * esbuild — file by file, no bundling, and no tsconfig `paths` resolution. So a
- * `.ts` entry here would be emitted as `src/main.js` still containing
- * `require("@/app.module")`, which Node reads as a missing npm package:
+ * `.ts` entry here would be emitted still containing `require("@/app.module")`,
+ * which Node reads as a missing npm package:
  *
  *   Cannot find module '@/app.module'
  *   Did you forget to add it to "dependencies" in package.json?
@@ -14,8 +14,8 @@
  * relative path, so this file just forwards to that output.
  *
  * Consequently: never turn this file into TypeScript, and never import from
- * `apps/pravaah-be/src` here.
+ * `../src` here.
  */
-const handler = require('../apps/pravaah-be/dist/src/serverless.js')
+const handler = require('../dist/src/serverless.js')
 
 module.exports = handler.default || handler
