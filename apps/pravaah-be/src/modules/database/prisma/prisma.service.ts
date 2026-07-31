@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 
+import { Pool } from 'pg'
 import { PrismaPg } from '@prisma/adapter-pg'
 
 import { ENV } from '@/constants/environment.constants'
@@ -23,6 +24,7 @@ export class PrismaService
   implements OnModuleInit, OnModuleDestroy
 {
   private readonly logger = new Logger(PrismaService.name)
+  private readonly pool: Pool
 
   constructor(configService: ConfigService) {
     const databaseUrl = configService.get<string>(ENV.DATABASE.URL)
@@ -30,8 +32,18 @@ export class PrismaService
       throw new Error('DATABASE_URL is not defined in environment variables')
     }
 
-    const adapter = new PrismaPg({ connectionString: databaseUrl })
+    const url = new URL(databaseUrl)
+    const maxStr = url.searchParams.get('connection_limit')
+    const max = maxStr ? parseInt(maxStr, 10) : 50
+
+    const pool = new Pool({
+      connectionString: databaseUrl,
+      max,
+    })
+
+    const adapter = new PrismaPg(pool)
     super({ adapter })
+    this.pool = pool
   }
 
   async onModuleInit(): Promise<void> {
@@ -46,6 +58,7 @@ export class PrismaService
 
   async onModuleDestroy(): Promise<void> {
     await this.$disconnect()
+    await this.pool.end()
     this.logger.log('Database disconnected')
   }
 }
