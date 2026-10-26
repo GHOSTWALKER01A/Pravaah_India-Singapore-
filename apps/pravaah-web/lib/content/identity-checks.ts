@@ -2,22 +2,24 @@
  * The identity checks a person actually completes, in the order the product
  * enforces them.
  *
- * SOURCE OF TRUTH: apps/pravaah-rn/src/features/kyc/flow.ts (`REQUIRED_CHECKS`)
- * and check-labels.ts (`CHECK_META`), which themselves mirror `REQUIRED_CHECKS`
- * in the backend kyc.state.ts. If the flow changes there, change it here — this
+ * SOURCE OF TRUTH: `REQUIRED_CHECKS.INDIA` in apps/pravaah-rn/src/features/kyc/
+ * flow.ts and `CHECK_META` in check-labels.ts, which themselves mirror the
+ * backend kyc.state.ts. If the India flow changes there, change it here — this
  * page promises a sequence, so it must not drift from the one that ships.
+ *
+ * India only. The app and API still carry the Singapore (Singpass) and "both"
+ * branches from the corridor build; they are retired from the product and are
+ * deliberately not presented here. Removing them from flow.ts and kyc.state.ts
+ * is tracked separately and does not change this sequence.
  */
 
 export type CheckId =
   | "PAN"
   | "AADHAAR_OKYC"
   | "BANK_PENNY_DROP"
-  | "SINGPASS_MYINFO"
   | "LIVENESS"
   | "FACE_MATCH"
   | "SANCTIONS_PEP";
-
-export type CorridorId = "INDIA" | "SINGAPORE" | "BOTH";
 
 export interface Check {
   /** Matches CheckType in the app so the two can be diffed by eye. */
@@ -39,7 +41,7 @@ export const CHECKS: Record<CheckId, Check> = {
   PAN: {
     id: "PAN",
     label: "PAN verification",
-    subtitle: "Income-tax identity (India)",
+    subtitle: "Income-tax identity",
     action: "Enter your 10-character PAN.",
     proves:
       "That the tax identity is real and registered, and tells us the name recorded against it.",
@@ -49,7 +51,7 @@ export const CHECKS: Record<CheckId, Check> = {
   AADHAAR_OKYC: {
     id: "AADHAAR_OKYC",
     label: "Aadhaar OKYC",
-    subtitle: "DigiLocker offline KYC (India)",
+    subtitle: "DigiLocker offline KYC",
     action:
       "You are handed to DigiLocker, sign in there, and authorise the release of your Aadhaar record.",
     proves:
@@ -60,23 +62,13 @@ export const CHECKS: Record<CheckId, Check> = {
   BANK_PENNY_DROP: {
     id: "BANK_PENNY_DROP",
     label: "Bank account",
-    subtitle: "Penny-drop name match (India)",
+    subtitle: "Penny-drop name match",
     action:
       "Enter your account number and IFSC. We deposit ₹1; your bank replies with the account holder's name.",
     proves:
       "That the account is live and that you are the person who owns it. The ₹1 is ours, not yours.",
     needs: "Account number and IFSC code.",
     duration: "Under a minute",
-  },
-  SINGPASS_MYINFO: {
-    id: "SINGPASS_MYINFO",
-    label: "Singpass Myinfo",
-    subtitle: "Government identity (Singapore)",
-    action:
-      "You are handed to Singpass, log in, and choose which Myinfo fields to release.",
-    proves: "Your Singapore identity, verified against the national digital ID.",
-    needs: "A Singpass account.",
-    duration: "Two minutes",
   },
   LIVENESS: {
     id: "LIVENESS",
@@ -100,60 +92,25 @@ export const CHECKS: Record<CheckId, Check> = {
   SANCTIONS_PEP: {
     id: "SANCTIONS_PEP",
     label: "Sanctions & PEP",
-    subtitle: "Global watchlist screening",
+    subtitle: "Watchlist screening",
     action:
       "Nothing — your verified name is screened against sanctions and politically-exposed-person lists.",
     proves:
-      "That issuing you a credential is lawful. Required of every regulated financial participant.",
+      "That issuing you a receipt is lawful. Required of every regulated financial participant.",
     needs: "Nothing. Runs automatically.",
     duration: "Automatic",
   },
 };
 
-/** Order defines the on-boarding sequence. Mirrors REQUIRED_CHECKS exactly. */
-export const REQUIRED_CHECKS: Record<CorridorId, readonly CheckId[]> = {
-  INDIA: [
-    "PAN",
-    "AADHAAR_OKYC",
-    "BANK_PENNY_DROP",
-    "LIVENESS",
-    "FACE_MATCH",
-    "SANCTIONS_PEP",
-  ],
-  SINGAPORE: ["SINGPASS_MYINFO", "LIVENESS", "FACE_MATCH", "SANCTIONS_PEP"],
-  BOTH: [
-    "PAN",
-    "AADHAAR_OKYC",
-    "BANK_PENNY_DROP",
-    "SINGPASS_MYINFO",
-    "LIVENESS",
-    "FACE_MATCH",
-    "SANCTIONS_PEP",
-  ],
-};
-
-export const CORRIDORS: ReadonlyArray<{
-  id: CorridorId;
-  label: string;
-  who: string;
-}> = [
-  {
-    id: "INDIA",
-    label: "India",
-    who: "You hold Indian identity documents and an Indian bank account.",
-  },
-  {
-    id: "SINGAPORE",
-    label: "Singapore",
-    who: "You hold a Singpass account.",
-  },
-  {
-    id: "BOTH",
-    label: "Both",
-    who: "You are established on both sides of the corridor — the strongest passport.",
-  },
+/** Order defines the on-boarding sequence. Mirrors REQUIRED_CHECKS.INDIA exactly. */
+export const REQUIRED_CHECKS: readonly CheckId[] = [
+  "PAN",
+  "AADHAAR_OKYC",
+  "BANK_PENNY_DROP",
+  "LIVENESS",
+  "FACE_MATCH",
+  "SANCTIONS_PEP",
 ];
 
-export function checksFor(corridor: CorridorId): Check[] {
-  return REQUIRED_CHECKS[corridor].map((id) => CHECKS[id]);
-}
+/** The sequence, resolved to its check records. */
+export const SEQUENCE: readonly Check[] = REQUIRED_CHECKS.map((id) => CHECKS[id]);

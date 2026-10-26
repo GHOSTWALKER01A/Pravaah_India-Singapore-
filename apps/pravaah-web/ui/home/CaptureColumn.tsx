@@ -103,7 +103,7 @@ export function CaptureColumn(): ReactElement {
             <ColumnStage
               stage="Diffuse"
               title="Your history is scattered"
-              body="No single institution holds the whole picture. Your salary is in one place, your deposits in another, your business income somewhere else entirely. Assembled by hand, this is weeks of statements and stamped letters."
+              body="No single institution holds the whole picture. Your takings land in one account, your savings in another, your business income somewhere else entirely. Assembled by hand, this is five forms, a document chase and weeks of statements — and it is where most thin-file applications die."
             >
               <ul className="mt-7 flex flex-wrap gap-2.5">
                 {SOURCES.map((source) => (

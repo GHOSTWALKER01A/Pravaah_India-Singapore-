@@ -26,7 +26,7 @@ const OUTCOMES: ReadonlyArray<{
     status: "In review",
     meaning:
       "A check needs a person to look at it — most often a name that nearly matches but not exactly.",
-    next: "Nothing is required from you while it is queued. Names transliterate badly across scripts and initials legitimately vary between a PAN, a bank record and a passport, so a partial mismatch goes to a reviewer instead of a rejection.",
+    next: "Nothing is required from you while it is queued. Names transliterate badly across scripts and initials legitimately vary between a PAN, an Aadhaar record and a bank account, so a partial mismatch goes to a reviewer instead of a rejection.",
     tone: "wait",
   },
   {

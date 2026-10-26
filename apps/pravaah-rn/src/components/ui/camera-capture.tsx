@@ -210,7 +210,7 @@ const styles = StyleSheet.create({
 
   reticleWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Space.xxl },
   reticle: { width: '84%', position: 'relative' },
-  oval: { ...StyleSheet.absoluteFillObject, borderRadius: 999, borderWidth: 2 },
+  oval: { ...StyleSheet.absoluteFill, borderRadius: 999, borderWidth: 2 },
   corner: { position: 'absolute', borderColor: '#fff' },
   tl: { top: 0, left: 0, borderTopWidth: 2, borderLeftWidth: 2 },
   tr: { top: 0, right: 0, borderTopWidth: 2, borderRightWidth: 2 },

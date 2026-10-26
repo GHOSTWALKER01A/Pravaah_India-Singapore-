@@ -40,6 +40,9 @@ import {
   Corridor,
   KycStatus,
   LedgerDirection,
+  PartnerRole,
+  PartnerStatus,
+  PartnerType,
   LedgerLeg,
   Prisma,
   PrismaClient,
@@ -71,7 +74,11 @@ import {
   sigmoid,
 } from '../src/modules/scoring/scoring.state'
 
-import { buildPravaahId, PRAVAAH_ID_ENTROPY_SYMBOLS } from '@pravaah/schema'
+import {
+  buildPravaahId,
+  DISCLOSABLE_CLAIMS,
+  PRAVAAH_ID_ENTROPY_SYMBOLS,
+} from '@pravaah/schema'
 
 import type { ScorecardParamsDto, ScoreFeature } from '@pravaah/schema'
 
@@ -837,6 +844,18 @@ async function seedVerifierPartner(): Promise<void> {
     .update(DEV_PARTNER_API_KEY)
     .digest('hex')
 
+  // M7 made scope enforcement fail CLOSED — a partner with an empty
+  // `allowedScopes` can request nothing — so the dev partner is given the full
+  // catalogue explicitly, exactly as an admin registering one through M3 does.
+  const m7Profile = {
+    type: PartnerType.LENDER,
+    status: PartnerStatus.ACTIVE,
+    domain: 'acme.example',
+    allowedScopes: [...DISCLOSABLE_CLAIMS],
+    retentionDays: 90,
+    approvedAt: new Date(),
+  }
+
   const partner = await prisma.verifierPartner.upsert({
     where: { audience: 'acme-bank' },
     // The hash is refreshed on re-seed so a local database always matches the
@@ -849,6 +868,7 @@ async function seedVerifierPartner(): Promise<void> {
       contactEmail: 'risk@acme.example',
       country: 'SG',
       isActive: true,
+      ...m7Profile,
     },
     create: {
       name: 'Acme Bank (dev)',
@@ -857,6 +877,22 @@ async function seedVerifierPartner(): Promise<void> {
       contactEmail: 'risk@acme.example',
       country: 'SG',
       isActive: true,
+      ...m7Profile,
+    },
+  })
+
+  // M7: a console user, so the partner console is usable on first boot. They sign
+  // in with the ordinary OTP login; this row is what authorises that session.
+  // Upserted on email, and never moved to another partner if it already exists.
+  await prisma.partnerUser.upsert({
+    where: { email: 'risk@acme.example' },
+    update: { isActive: true, role: PartnerRole.PARTNER_ADMIN },
+    create: {
+      partnerId: partner.id,
+      email: 'risk@acme.example',
+      phone: process.env.SEED_PARTNER_CONSOLE_PHONE ?? '+6590000001',
+      name: 'Acme Risk Desk',
+      role: PartnerRole.PARTNER_ADMIN,
     },
   })
 
@@ -864,6 +900,9 @@ async function seedVerifierPartner(): Promise<void> {
     `   ✔ M3 verifier → ${partner.name} · audience "${partner.audience}"`,
   )
   console.log(`       x-pravaah-partner-key: ${DEV_PARTNER_API_KEY}`)
+  console.log(
+    `       console user: risk@acme.example (phone ${process.env.SEED_PARTNER_CONSOLE_PHONE ?? '+6590000001'})`,
+  )
   console.log('       ⚠ dev-only — this key is public in prisma/seed.ts')
 }
 

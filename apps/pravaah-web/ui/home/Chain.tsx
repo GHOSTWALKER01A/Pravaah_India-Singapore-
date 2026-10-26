@@ -38,9 +38,10 @@ export function Chain(): ReactElement {
             This is why MyPravaah is built in order rather than as a set of
             features. An unverified identity cannot produce consented data; data
             nobody consented to cannot produce a score; a score with no data
-            behind it cannot be sealed into anything worth presenting. All of it
-            is built — and the point of the order is that no link can be
-            skipped, not that some are still missing.
+            behind it cannot be sealed into a receipt worth showing a lender.
+            Every link below is built — the point of the order is that no link
+            can be skipped, and the copilot, when it ships, will walk the same
+            chain rather than around it.
           </p>
         </div>
 
@@ -107,20 +108,19 @@ export function Chain(): ReactElement {
           ))}
         </ol>
 
-        {/* Downstream of the passport. Kept visually subordinate because it is
+        {/* Downstream of the receipt. Kept visually subordinate because it is
             subordinate: PRODUCT.md is explicit that payments are one module of
             eight and not the point of the product. */}
         <div className="mt-20 border-t-2 border-intaglio pt-14 sm:mt-24">
           <div className="max-w-3xl">
             <Legend className="text-intaglio-mid">
-              Downstream · what the passport is worth
+              Downstream · what the receipt is worth
             </Legend>
             <p className="mt-6 text-base leading-relaxed text-intaglio sm:text-lg">
-              Sending money across the corridor, buying cover priced on your
-              record, and being protected from someone impersonating you are all
-              genuinely useful. Each is one module of eight, and each is worth
-              something only because of the trust built above it. Without the
-              passport, they are another payments app.
+              Moving money over UPI, buying cover priced on your record, and
+              being protected from someone impersonating you are all genuinely
+              useful. Each is worth something only because of the trust built
+              above it. Without the receipt, they are another payments app.
             </p>
           </div>
 

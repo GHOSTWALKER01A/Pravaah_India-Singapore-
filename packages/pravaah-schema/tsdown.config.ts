@@ -13,6 +13,7 @@ export default defineConfig({
     'src/payments/index.ts',
     'src/insurance/index.ts',
     'src/fraud/index.ts',
+    'src/partner/index.ts',
   ],
   format: ['cjs'],
   dts: true,

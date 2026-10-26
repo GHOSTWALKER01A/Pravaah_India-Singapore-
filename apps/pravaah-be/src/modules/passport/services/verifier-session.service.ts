@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   GoneException,
   Inject,
@@ -26,6 +27,7 @@ import {
   ActorType,
   CardStatus,
   CredentialStatus,
+  PartnerStatus,
   Prisma,
   VerifierRequestStatus,
   type VerifierPartner,
@@ -33,15 +35,46 @@ import {
 
 import { PassportConfig } from '@/modules/passport/passport.config'
 import {
+  claimsOutsideScope,
   isRequestOpen,
   partitionRequestedClaims,
   resolveTemplate,
 } from '@/modules/passport/passport.state'
 import { PeerVerifyService } from '@/modules/passport/services/peer-verify.service'
 import { PresentationService } from '@/modules/passport/services/presentation.service'
+import {
+  VerifierEventsRegistry,
+  type VerifierRequestEventType,
+} from '@/modules/passport/services/verifier-events.registry'
 
 /** 256 bits of challenge. A guessable nonce is not a replay defence. */
 const NONCE_BYTES = 32
+
+/** How many stale requests one sweep expires. The next sweep takes the rest. */
+const EXPIRE_BATCH = 500
+
+/**
+ * Partner-console context for {@link VerifierSessionService.createRequest}.
+ *
+ * Everything here is optional so M3's own `/verify/request` keeps working
+ * unchanged; M7 fills it in. It is written in the SAME insert as the request, so a
+ * request can never exist without the predicates and key it was opened with.
+ */
+export interface PartnerRequestOptions {
+  /**
+   * The claims this call may request. Defaults to the partner's approved scope.
+   * M7 passes the API key's scope ∩ the partner's, so a narrow key stays narrow.
+   */
+  scopes?: readonly string[]
+  /** Claims to add on top of a template (M7's compiled predicates). */
+  extraClaims?: readonly string[]
+  apiKeyId?: string | null
+  partnerTemplateId?: string | null
+  externalRef?: string | null
+  idempotencyKey?: string | null
+  predicates?: Prisma.InputJsonValue | null
+  createdByPartnerUserId?: string | null
+}
 
 /**
  * The verifier↔holder handshake.
@@ -70,6 +103,7 @@ export class VerifierSessionService {
     private readonly peers: PeerVerifyService,
     private readonly config: PassportConfig,
     private readonly audit: AuditService,
+    private readonly events: VerifierEventsRegistry,
     @Inject(APP_LOGGER) logger: AppLogger,
   ) {
     this.logger = logger.child({ context: VerifierSessionService.name })
@@ -79,7 +113,16 @@ export class VerifierSessionService {
   async createRequest(
     dto: CreateVerifierRequestDto,
     partner: VerifierPartner,
+    options: PartnerRequestOptions = {},
   ): Promise<Record<string, unknown>> {
+    // The guard already refuses a non-active partner; re-checked here because M7's
+    // console reaches this method without passing through that guard.
+    if (partner.status !== PartnerStatus.ACTIVE || !partner.isActive) {
+      throw new ForbiddenException(
+        'This partner is not active and cannot open requests',
+      )
+    }
+
     const resolved = dto.template
       ? resolveTemplate(dto.template)
       : {
@@ -88,12 +131,26 @@ export class VerifierSessionService {
           label: 'Custom request',
         }
 
-    const { known, unknown } = partitionRequestedClaims(
-      dto.template ? resolved.claims : (dto.requestedClaims ?? []),
-    )
+    const { known, unknown } = partitionRequestedClaims([
+      ...(dto.template ? resolved.claims : (dto.requestedClaims ?? [])),
+      ...(options.extraClaims ?? []),
+    ])
     if (!known.length) {
       throw new BadRequestException(
         `None of the requested claims exist on this credential type: ${unknown.join(', ')}`,
+      )
+    }
+
+    // Scope is enforced at the moment of ASKING, so a holder is never shown a
+    // request for data the partner was not approved to receive. Fails closed: a
+    // partner with no approved scope can ask for nothing.
+    const outside = claimsOutsideScope(
+      known,
+      options.scopes ?? partner.allowedScopes,
+    )
+    if (outside.length) {
+      throw new ForbiddenException(
+        `This request asks for claims outside your approved scope: ${outside.join(', ')}`,
       )
     }
 
@@ -115,6 +172,12 @@ export class VerifierSessionService {
         credentialId: target.credentialId,
         cardRef: dto.cardRef ?? null,
         expiresAt: new Date(Date.now() + dto.ttlSeconds * 1000),
+        apiKeyId: options.apiKeyId ?? null,
+        partnerTemplateId: options.partnerTemplateId ?? null,
+        externalRef: options.externalRef ?? null,
+        idempotencyKey: options.idempotencyKey ?? null,
+        predicates: options.predicates ?? Prisma.DbNull,
+        createdByPartnerUserId: options.createdByPartnerUserId ?? null,
       },
     })
 
@@ -137,6 +200,7 @@ export class VerifierSessionService {
       partner: partner.name,
       claimCount: known.length,
     })
+    await this.notify('REQUEST_CREATED', request)
 
     return {
       requestId: request.id,
@@ -151,6 +215,9 @@ export class VerifierSessionService {
       /** Deep link / QR payload that hands the request to the holder's wallet. */
       holderLink: this.config.walletRequestLink(request.id),
       status: request.status,
+      externalRef: request.externalRef ?? undefined,
+      /** True when no holder is bound yet — the first holder to scan claims it. */
+      openToAnyHolder: request.userId === null,
     }
   }
 
@@ -166,6 +233,7 @@ export class VerifierSessionService {
     cardRef: string,
     partner: VerifierPartner,
     template: CreateVerifierRequestDto['template'],
+    options: PartnerRequestOptions = {},
   ): Promise<Record<string, unknown>> {
     const card = await this.prisma.passportCard.findUnique({
       where: { qrPayloadRef: cardRef },
@@ -191,6 +259,7 @@ export class VerifierSessionService {
         ttlSeconds: 300,
       },
       partner,
+      options,
     )
   }
 
@@ -209,7 +278,19 @@ export class VerifierSessionService {
   ): Promise<Record<string, unknown>> {
     const request = await this.prisma.verifierRequest.findUnique({
       where: { id: requestId },
-      include: { partner: { select: { name: true, country: true } } },
+      include: {
+        partner: {
+          select: {
+            name: true,
+            country: true,
+            domain: true,
+            type: true,
+            trustLevel: true,
+            retentionDays: true,
+            status: true,
+          },
+        },
+      },
     })
     if (!request) throw new NotFoundException('Request not found')
 
@@ -221,7 +302,12 @@ export class VerifierSessionService {
       throw new NotFoundException('Request not found')
     }
 
-    const open = isRequestOpen(request.status, request.expiresAt)
+    // A request from a partner that has since been suspended is not answerable,
+    // whatever its own status says: the holder must never share with a party we have
+    // stopped vouching for. (M7 also cancels such requests; this covers the window.)
+    const partnerLive =
+      !request.partner || request.partner.status === PartnerStatus.ACTIVE
+    const open = partnerLive && isRequestOpen(request.status, request.expiresAt)
     const credential = await this.prisma.credential.findFirst({
       where: {
         userId,
@@ -262,6 +348,22 @@ export class VerifierSessionService {
        * whoever they appear to be.
        */
       requester,
+      /**
+       * Who the institution is, for the anti-phishing half of the consent screen: the
+       * verified domain an admin approved, what kind of business it is, and how long
+       * it has promised to keep what the holder shares. Absent on a peer check.
+       */
+      verifierProfile: request.partner
+        ? {
+            name: request.partner.name,
+            domain: request.partner.domain,
+            type: request.partner.type,
+            trustLevel: request.partner.trustLevel,
+            country: request.partner.country,
+            retentionDays: request.partner.retentionDays,
+            approved: request.partner.status === PartnerStatus.ACTIVE,
+          }
+        : null,
       purpose: request.purpose,
       template: request.template,
       channel: request.channel,
@@ -338,6 +440,16 @@ export class VerifierSessionService {
     // holder unable to retry.
     let built: Awaited<ReturnType<PresentationService['present']>>
     try {
+      // Observers (M7's partner-status and M6 abuse gates) may veto the share. Asked
+      // BEFORE anything is built, so a veto discloses nothing, and inside this try so a
+      // veto hands the lock back like any other failure.
+      await this.events.beforeApprove({
+        requestId: request.id,
+        partnerId: request.partnerId,
+        userId,
+        revealClaims: dto.revealClaims,
+      })
+
       // A holder may reveal LESS than was asked but never more: a verifier that asked for a
       // band must not receive an exact score because the wallet had a bug, and
       // over-disclosure is not something the holder can undo afterwards.
@@ -372,6 +484,12 @@ export class VerifierSessionService {
             reason: built.verification.reason,
           },
         )
+        await this.notify('PRESENTATION_REJECTED', {
+          id: request.id,
+          partnerId: request.partnerId,
+          userId,
+          presentationId: built.presentationId,
+        })
         throw new BadRequestException(
           built.verification.reason ??
             'The proof from your device could not be verified. Please try again.',
@@ -404,6 +522,14 @@ export class VerifierSessionService {
       requestId,
       disclosedCount: built.disclosedClaims.length,
       requestedCount: request.requestedClaims.length,
+    })
+    // Awaited, so the consent receipt M7 issues exists by the time the wallet shows
+    // "shared". It cannot fail the approval — `emit` never throws.
+    await this.notify('APPROVED', {
+      id: request.id,
+      partnerId: request.partnerId,
+      userId,
+      presentationId: built.presentationId,
     })
 
     return {
@@ -446,6 +572,11 @@ export class VerifierSessionService {
       entityId: request.id,
       metadata: { audience: request.audience, hasReason: !!reason },
     })
+    await this.notify('DECLINED', {
+      id: request.id,
+      partnerId: request.partnerId,
+      userId,
+    })
     return { requestId: request.id, status: VerifierRequestStatus.DECLINED }
   }
 
@@ -475,10 +606,12 @@ export class VerifierSessionService {
       request.status === VerifierRequestStatus.PENDING &&
       request.expiresAt <= new Date()
     ) {
-      await this.prisma.verifierRequest.update({
-        where: { id: request.id },
+      // Conditional, so a holder approving in the same instant is not overwritten.
+      const expired = await this.prisma.verifierRequest.updateMany({
+        where: { id: request.id, status: VerifierRequestStatus.PENDING },
         data: { status: VerifierRequestStatus.EXPIRED },
       })
+      if (expired.count > 0) await this.notify('EXPIRED', request)
       return {
         requestId: request.id,
         status: VerifierRequestStatus.EXPIRED,
@@ -491,13 +624,14 @@ export class VerifierSessionService {
       request.status === VerifierRequestStatus.CONSUMED
     ) {
       if (request.status === VerifierRequestStatus.APPROVED) {
-        await this.prisma.verifierRequest.update({
-          where: { id: request.id },
+        const collected = await this.prisma.verifierRequest.updateMany({
+          where: { id: request.id, status: VerifierRequestStatus.APPROVED },
           data: {
             status: VerifierRequestStatus.CONSUMED,
             consumedAt: new Date(),
           },
         })
+        if (collected.count > 0) await this.notify('COLLECTED', request)
         await this.prisma.presentation
           .findUnique({
             where: { id: request.presentationId ?? '' },
@@ -526,20 +660,160 @@ export class VerifierSessionService {
       message:
         request.status === VerifierRequestStatus.DECLINED
           ? 'The holder declined to share.'
-          : 'Waiting for the holder to approve.',
+          : request.status === VerifierRequestStatus.CANCELLED
+            ? 'This request was cancelled.'
+            : request.status === VerifierRequestStatus.EXPIRED
+              ? 'The holder did not respond in time.'
+              : 'Waiting for the holder to approve.',
     }
   }
 
-  /** Sweep expired requests. Called by the lifecycle scheduler. */
+  /**
+   * Sweep expired requests. Called by the lifecycle scheduler.
+   *
+   * Reads the ids first so each expiry can be REPORTED — a partner is owed a
+   * "your applicant never answered" webhook, and a bare `updateMany` cannot say
+   * which rows it touched. The write stays conditional on PENDING, so a request
+   * approved between the read and the write is never expired; observers re-read
+   * status before acting on the event, which covers that same window.
+   */
   async expireStale(): Promise<number> {
-    const result = await this.prisma.verifierRequest.updateMany({
+    const stale = await this.prisma.verifierRequest.findMany({
       where: {
         status: VerifierRequestStatus.PENDING,
         expiresAt: { lt: new Date() },
       },
+      select: { id: true, partnerId: true, userId: true },
+      take: EXPIRE_BATCH,
+    })
+    if (!stale.length) return 0
+
+    const result = await this.prisma.verifierRequest.updateMany({
+      where: {
+        id: { in: stale.map((row) => row.id) },
+        status: VerifierRequestStatus.PENDING,
+      },
       data: { status: VerifierRequestStatus.EXPIRED },
     })
+    for (const row of stale) await this.notify('EXPIRED', row)
     return result.count
+  }
+
+  /**
+   * The verifier withdraws a request the holder has not answered.
+   *
+   * A compare-and-swap on the same fields `claimRequest` locks on, so a cancel and
+   * an approval racing each other cannot both win: whichever flips `respondedAt`
+   * first owns the request, and the other sees `count === 0`.
+   */
+  async cancel(
+    requestId: string,
+    partnerId: string,
+    reason?: string,
+  ): Promise<Record<string, unknown>> {
+    const cancelled = await this.prisma.verifierRequest.updateMany({
+      where: {
+        id: requestId,
+        partnerId,
+        status: VerifierRequestStatus.PENDING,
+        respondedAt: null,
+      },
+      data: {
+        status: VerifierRequestStatus.CANCELLED,
+        cancelledAt: new Date(),
+      },
+    })
+
+    if (cancelled.count === 0) {
+      const existing = await this.prisma.verifierRequest.findFirst({
+        where: { id: requestId, partnerId },
+        select: { status: true },
+      })
+      // Scoped to the partner, so another partner's request id is a 404 that
+      // confirms nothing.
+      if (!existing) throw new NotFoundException('Request not found')
+      throw new ConflictException(
+        existing.status === VerifierRequestStatus.PENDING
+          ? 'The holder is answering this request right now; it can no longer be cancelled'
+          : `This request is already ${existing.status.toLowerCase()}`,
+      )
+    }
+
+    await this.audit.log({
+      actorType: ActorType.SYSTEM,
+      action: 'passport.verify_cancelled',
+      entity: 'VerifierRequest',
+      entityId: requestId,
+      metadata: { partnerId, hasReason: !!reason },
+    })
+    await this.notify('CANCELLED', { id: requestId, partnerId })
+    return { requestId, status: VerifierRequestStatus.CANCELLED }
+  }
+
+  /**
+   * Cancel every unanswered request a partner has open. Called when the partner is
+   * suspended or revoked: a holder must not be left holding a live prompt from a
+   * party we have stopped vouching for.
+   */
+  async cancelPendingForPartner(partnerId: string): Promise<number> {
+    let total = 0
+    // Batched so a partner with thousands of open requests cannot turn one admin
+    // action into one enormous statement; loops until none remain.
+    for (;;) {
+      const batch = await this.prisma.verifierRequest.findMany({
+        where: {
+          partnerId,
+          status: VerifierRequestStatus.PENDING,
+          respondedAt: null,
+        },
+        select: { id: true, userId: true },
+        take: EXPIRE_BATCH,
+      })
+      if (!batch.length) return total
+
+      const result = await this.prisma.verifierRequest.updateMany({
+        where: {
+          id: { in: batch.map((row) => row.id) },
+          status: VerifierRequestStatus.PENDING,
+          respondedAt: null,
+        },
+        data: {
+          status: VerifierRequestStatus.CANCELLED,
+          cancelledAt: new Date(),
+        },
+      })
+      total += result.count
+      for (const row of batch) {
+        await this.notify('CANCELLED', {
+          id: row.id,
+          partnerId,
+          userId: row.userId,
+        })
+      }
+      // Rows a holder claimed mid-batch stay PENDING with `respondedAt` set and no
+      // longer match, so a short count cannot loop forever.
+      if (result.count === 0) return total
+    }
+  }
+
+  /** Report a handshake fact to observers. Never throws — see VerifierEventsRegistry. */
+  private notify(
+    type: VerifierRequestEventType,
+    request: {
+      id: string
+      partnerId: string | null
+      userId?: string | null
+      presentationId?: string | null
+    },
+  ): Promise<void> {
+    return this.events.emit({
+      type,
+      requestId: request.id,
+      partnerId: request.partnerId,
+      userId: request.userId ?? null,
+      presentationId: request.presentationId ?? null,
+      occurredAt: new Date(),
+    })
   }
 
   // ── helpers ───────────────────────────────────────────────────────────────

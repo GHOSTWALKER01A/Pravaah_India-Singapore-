@@ -20,11 +20,11 @@ import { SmoothScroll } from "@/ui/motion/SmoothScroll";
   Bodoni Moda denominations, Archivo widened to engraver's gothic legends,
   Azeret Mono for serials and data fields. Containers are engraved panels with
   cut corners, generated guilloche and real microtext — never cards.
-  STORY: Your history died at the airport. It does not have to. A consented,
-  explainable credential that you hold travels with you — here is what applying
-  actually takes.
+  STORY: Refused with no reason, for want of documents you never had. It does
+  not have to go that way. One consent, an answer that carries its reasons, and
+  a reputation receipt you hold and can show the next lender.
   FIRST VIEWPORT: Full-bleed intaglio field. Issuing legend and hairline top
-  left; a guilloche rosette holding the IN↔SG latent panel at the right; the
+  left; a guilloche rosette holding the latent panel at the right; the
   didone promise at note-legend scale across the left two-thirds; the data-field
   grid and both actions along the base, primary first.
   FORM: Security engraving / banknote intaglio — candidate 4 of the ordered

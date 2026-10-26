@@ -63,6 +63,7 @@ export type CardStatusInput = z.infer<typeof CardStatusSchema>
  *   DECLINED  holder refused (an explicit "no", not a timeout)
  *   EXPIRED   the nonce aged out before the holder acted
  *   CONSUMED  the verifier collected the result; the nonce is now burnt
+ *   CANCELLED the verifier withdrew it, or its partner was suspended (M7)
  */
 export const VERIFIER_REQUEST_STATUS = {
   PENDING: 'PENDING',
@@ -70,6 +71,7 @@ export const VERIFIER_REQUEST_STATUS = {
   DECLINED: 'DECLINED',
   EXPIRED: 'EXPIRED',
   CONSUMED: 'CONSUMED',
+  CANCELLED: 'CANCELLED',
 } as const
 
 export const VerifierRequestStatusSchema = z.enum([
@@ -78,6 +80,7 @@ export const VerifierRequestStatusSchema = z.enum([
   VERIFIER_REQUEST_STATUS.DECLINED,
   VERIFIER_REQUEST_STATUS.EXPIRED,
   VERIFIER_REQUEST_STATUS.CONSUMED,
+  VERIFIER_REQUEST_STATUS.CANCELLED,
 ])
 export type VerifierRequestStatusInput = z.infer<
   typeof VerifierRequestStatusSchema

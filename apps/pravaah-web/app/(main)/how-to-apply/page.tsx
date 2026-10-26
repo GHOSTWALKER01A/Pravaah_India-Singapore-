@@ -3,10 +3,10 @@ import type { ReactElement } from "react";
 
 import { buildOpenAppHref } from "@/lib/config/site";
 import { ROUTES } from "@/lib/constants/routes";
-import { CHECKS, REQUIRED_CHECKS } from "@/lib/content/corridor-checks";
+import { SEQUENCE } from "@/lib/content/identity-checks";
 import { pageMetadata } from "@/lib/seo";
 import { howToApplyJsonLd } from "@/lib/seo/json-ld";
-import { CorridorSteps } from "@/ui/apply/CorridorSteps";
+import { CheckSequence } from "@/ui/apply/CheckSequence";
 import { Outcomes } from "@/ui/apply/Outcomes";
 import { Container } from "@/ui/layout/Container";
 import { Guilloche, GuillocheBand } from "@/ui/engraving/Guilloche";
@@ -17,7 +17,7 @@ import { Legend } from "@/ui/primitives/Legend";
 export const metadata: Metadata = pageMetadata({
   title: "How to apply",
   description:
-    "The identity checks required to hold a MyPravaah reputation passport, in the order they are enforced — what each one asks of you, what it proves, and what you need in hand.",
+    "The six identity checks required to hold a MyPravaah reputation receipt, in the order they are enforced — what each one asks of you, what it proves, and what you need in hand.",
   path: ROUTES.HOW_TO_APPLY,
 });
 
@@ -25,17 +25,12 @@ export const metadata: Metadata = pageMetadata({
  * Steps to apply.
  *
  * The reader's question is "what will this actually cost me in time and
- * documents", so the page answers that before it argues anything. The
- * corridor selector is client-side; everything else renders on the server.
+ * documents", so the page answers that before it argues anything. It renders
+ * entirely on the server: there is one sequence, so there is nothing to choose.
  */
 export default function HowToApplyPage(): ReactElement {
-  // Structured data uses the India sequence — the longest single-country path
-  // and the one most searches will be for.
   const jsonLd = howToApplyJsonLd(
-    REQUIRED_CHECKS.INDIA.map((id) => ({
-      label: CHECKS[id].label,
-      action: CHECKS[id].action,
-    })),
+    SEQUENCE.map((check) => ({ label: check.label, action: check.action })),
   );
 
   return (
@@ -72,7 +67,7 @@ export default function HowToApplyPage(): ReactElement {
 
           <div className="mt-12 border-t border-reverse/20 pt-9">
             <DataFieldGrid className="grid-cols-2 sm:grid-cols-4">
-              <DataField label="Steps" value="4 – 7, by corridor" />
+              <DataField label="Steps" value={String(SEQUENCE.length)} />
               <DataField label="Typical time" value="Under 15 minutes" />
               <DataField label="Cost to you" value="Nothing" />
               <DataField label="Repeat later" value="Not required" />
@@ -104,9 +99,8 @@ export default function HowToApplyPage(): ReactElement {
               <ul className="mt-9 flex flex-col gap-5">
                 {[
                   "A phone with a working front camera and reasonable light.",
-                  "Your PAN number, and an Aadhaar-linked mobile number for the DigiLocker step (India).",
-                  "Your bank account number and IFSC (India).",
-                  "A Singpass account (Singapore).",
+                  "Your PAN number, and an Aadhaar-linked mobile number for the DigiLocker step.",
+                  "Your bank account number and IFSC.",
                 ].map((item) => (
                   <li
                     key={item}
@@ -139,12 +133,12 @@ export default function HowToApplyPage(): ReactElement {
               The sequence
             </Legend>
             <h2 className="denomination mt-8 text-[2rem] text-intaglio-deep sm:text-[2.75rem]">
-              The steps differ by corridor, because the documents do.
+              Six checks, in an order the app enforces.
             </h2>
           </div>
 
           <div className="mt-14">
-            <CorridorSteps />
+            <CheckSequence />
           </div>
         </Container>
       </section>
@@ -191,12 +185,12 @@ export default function HowToApplyPage(): ReactElement {
                       body: "Usually inside a minute, and it arrives with the five things driving it and the changes that would raise it. If your history is too thin to say anything useful, you are told that rather than given a number.",
                     },
                     {
-                      step: "Your passport is issued",
-                      body: "The score is sealed into a signed credential bound to a key on your phone. From that moment it is yours: you decide who sees it, claim by claim, and you can revoke it.",
+                      step: "Your reputation receipt is issued",
+                      body: "The score is sealed into a signed receipt bound to a key on your phone. From that moment it is yours: you decide who sees it, claim by claim, and you can revoke it.",
                     },
                     {
-                      step: "Somebody checks it",
-                      body: "A lender, a landlord or another person verifies the signature without calling us and without receiving the underlying data. You approve each request, and you can see afterwards exactly what left your wallet.",
+                      step: "A lender checks it",
+                      body: "A bank, NBFC or insurer on the panel verifies the signature without calling us and without receiving the underlying data, then records its decision. You approve each request, and you can see afterwards exactly what left your wallet. Refused? Show the same receipt to the next partner — nothing above is repeated.",
                     },
                   ].map((item, index) => (
                     <li key={item.step} className="flex gap-5">

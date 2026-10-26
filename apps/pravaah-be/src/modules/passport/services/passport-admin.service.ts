@@ -8,9 +8,10 @@ import {
 } from '@nestjs/common'
 
 import { APP_LOGGER, type AppLogger } from '@pravaah/nestjs-logger'
-import type {
-  CredentialListQueryDto,
-  RegisterPartnerDto,
+import {
+  DISCLOSABLE_CLAIMS,
+  type CredentialListQueryDto,
+  type RegisterPartnerDto,
 } from '@pravaah/schema'
 
 import { AuditService } from '@/modules/audit/audit.service'
@@ -19,8 +20,11 @@ import { PrismaService } from '@/modules/database/prisma/prisma.service'
 import {
   ActorType,
   CredentialStatus,
+  PartnerStatus,
   Prisma,
 } from 'generated/prisma/client'
+
+import { VerifierSessionService } from '@/modules/passport/services/verifier-session.service'
 
 /**
  * Admin oversight for M3 — the credential-risk surface.
@@ -43,6 +47,7 @@ export class PassportAdminService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly sessions: VerifierSessionService,
     @Inject(APP_LOGGER) logger: AppLogger,
   ) {
     this.logger = logger.child({ context: PassportAdminService.name })
@@ -272,6 +277,15 @@ export class PassportAdminService {
         apiKeyHash: createHash('sha256').update(apiKey).digest('hex'),
         contactEmail: dto.contactEmail ?? null,
         country: dto.country ?? null,
+        // An admin registering a verifier directly is vouching for it in full — the M3
+        // behaviour, kept. Written EXPLICITLY because M7 made scope enforcement fail
+        // closed: a partner with an empty scope can request nothing. Partners that
+        // apply through the M7 console get a narrower scope at approval instead.
+        status: PartnerStatus.ACTIVE,
+        isActive: true,
+        allowedScopes: [...DISCLOSABLE_CLAIMS],
+        approvedAt: new Date(),
+        approvedById: adminId,
       },
     })
 
@@ -314,6 +328,10 @@ export class PassportAdminService {
         country: true,
         contactEmail: true,
         isActive: true,
+        status: true,
+        type: true,
+        domain: true,
+        allowedScopes: true,
         createdAt: true,
         lastUsedAt: true,
         _count: { select: { presentations: true, requests: true } },
@@ -326,6 +344,10 @@ export class PassportAdminService {
       country: row.country,
       contactEmail: row.contactEmail,
       isActive: row.isActive,
+      status: row.status,
+      type: row.type,
+      domain: row.domain,
+      allowedScopes: row.allowedScopes,
       createdAt: row.createdAt,
       lastUsedAt: row.lastUsedAt,
       requestCount: row._count.requests,
@@ -350,19 +372,36 @@ export class PassportAdminService {
     })
     if (!partner) throw new NotFoundException('Verifier not found')
 
+    // REVOKED, not merely inactive: this route is M3's `partners/:id/revoke`, and
+    // M7's lifecycle treats REVOKED as terminal. `isActive` is kept in step with
+    // `status` so M3 code that reads the boolean stays truthful.
     await this.prisma.verifierPartner.update({
       where: { id: partnerId },
-      data: { isActive: false },
+      data: {
+        isActive: false,
+        status: PartnerStatus.REVOKED,
+        statusReason: 'Revoked from the M3 admin console',
+      },
     })
+    const cancelled = await this.sessions.cancelPendingForPartner(partnerId)
     await this.audit.log({
       actorType: ActorType.ADMIN,
       actorId: adminId,
       action: 'passport.partner_deactivated',
       entity: 'VerifierPartner',
       entityId: partnerId,
-      metadata: { name: partner.name, audience: partner.audience },
+      metadata: {
+        name: partner.name,
+        audience: partner.audience,
+        cancelledRequests: cancelled,
+      },
     })
-    return { id: partnerId, isActive: false }
+    return {
+      id: partnerId,
+      isActive: false,
+      status: PartnerStatus.REVOKED,
+      cancelledRequests: cancelled,
+    }
   }
 
   /**

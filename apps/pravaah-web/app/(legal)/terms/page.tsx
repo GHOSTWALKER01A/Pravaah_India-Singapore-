@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import type { ReactElement } from "react";
 
-import { SITE_CONFIG } from "@/lib/config/site";
+import { SITE_CONFIG, STAGE } from "@/lib/config/site";
 import { ROUTES } from "@/lib/constants/routes";
 import { pageMetadata } from "@/lib/seo";
 import { DocumentShell, ReplaceBeforeLaunch } from "@/ui/layout/DocumentShell";
@@ -59,22 +59,25 @@ export default function TermsPage(): ReactElement {
           you through India&rsquo;s regulated Account Aggregator framework;
         </li>
         <li>
-          and, as those capabilities are released, produces an explainable score
-          and issues it to you as a credential you hold and present.
+          produces an explainable score from it, with the reasons attached;
+        </li>
+        <li>
+          issues that score to you as a reputation receipt you hold, and lets
+          lenders and insurers you choose verify it and record a decision.
         </li>
       </ul>
       <p>
-        MyPravaah is not a bank, a lender, a credit bureau, or an insurer. We do not
-        make lending decisions and we do not guarantee that any institution will
-        accept your credential or act on it. What we provide is evidence; what
-        another party does with that evidence is theirs to decide.
+        MyPravaah is not a bank, a lender, an NBFC, a credit bureau, or an
+        insurer. We do not lend, we do not underwrite, we do not make lending
+        decisions, and we do not guarantee that any institution will accept your
+        receipt or act on it. What we provide is evidence; what another party does
+        with that evidence is theirs to decide.
       </p>
 
       <h2>3. Eligibility</h2>
       <p>
-        You must be at least 18, verifiable on at least one side of the
-        India&ndash;Singapore corridor, acting for yourself, and not subject to
-        sanctions. The operating detail is set out in{" "}
+        You must be at least 18, verifiable in India, acting for yourself, and
+        not subject to sanctions. The operating detail is set out in{" "}
         <Link href={ROUTES.LEGAL.RULES}>Rules</Link>, which forms part of these
         terms.
       </p>
@@ -124,29 +127,24 @@ export default function TermsPage(): ReactElement {
       <h2>6. Third parties</h2>
       <p>
         Parts of the service depend on providers outside our control — identity
-        verification services, DigiLocker, Singpass, Account Aggregators, and the
-        banks that hold your data. Where one of those is unavailable or returns an
+        verification services, DigiLocker, Account Aggregators, the UPI rails,
+        the banks that hold your data, and the lenders and insurers you choose to
+        show a receipt to. Where one of those is unavailable or returns an
         incorrect result, we will tell you what happened and what you can do. We
         are not liable for their independent acts, and they are not our agents.
       </p>
 
       <h2>7. Availability, and what is not a live service</h2>
       <p>
-        All eight modules of MyPravaah — identity, consent and data collection,
-        scoring, credential issuance, verification, money movement, insurance and
-        the fraud engine — are built and exercised end to end. That is a statement
-        about the software and about nothing else.
+        {STAGE.built} {STAGE.building} That is a statement about the software
+        and about nothing else.
       </p>
       <p>
         <strong>
           MyPravaah does not currently operate as a licensed financial service.
         </strong>{" "}
-        We are not a licensed Financial Information User, hold no payments licence
-        or payment service provider agreement, and have no insurance risk carrier
-        on paper. Those integrations run against provider sandboxes. No real money
-        has moved through the service, and no insurance policy issued by it is in
-        force. The mobile application is not published in any app store at the date
-        of these terms.
+        {STAGE.pending} The mobile application is not published in any app store
+        at the date of these terms.
       </p>
       <p>
         Nothing on this site or in the app should be read as an offer of a

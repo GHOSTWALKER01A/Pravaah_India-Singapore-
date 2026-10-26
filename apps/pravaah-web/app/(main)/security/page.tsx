@@ -17,7 +17,7 @@ import { Legend } from "@/ui/primitives/Legend";
 export const metadata: Metadata = pageMetadata({
   title: "Security",
   description:
-    "How a MyPravaah passport resists forgery, how your financial data is protected in transit and at rest, what we deliberately do not do, and what we have not yet earned the right to claim.",
+    "How a MyPravaah reputation receipt resists forgery, how your financial data is protected in transit and at rest, what we deliberately do not do, and what we have not yet earned the right to claim.",
   path: ROUTES.SECURITY,
 });
 
@@ -54,10 +54,10 @@ export default function SecurityPage(): ReactElement {
           </h1>
 
           <p className="mt-8 max-w-2xl text-base leading-relaxed text-reverse-dim sm:text-lg">
-            Two things have to be true for this product to be worth anything: an
-            institution that has never met you must be able to verify your
-            credential, and nobody must be able to manufacture one. Everything
-            below serves one of those two.
+            Two things have to be true for this product to be worth anything: a
+            lender that has never met you must be able to verify your receipt,
+            and nobody must be able to manufacture one. Everything below serves
+            one of those two.
           </p>
         </Container>
 

@@ -6,20 +6,20 @@ export const ROOT_METADATA: Metadata = {
   metadataBase: new URL(BASE_URL),
   title: {
     template: "%s · MyPravaah",
-    default: "MyPravaah — a financial reputation that crosses the border with you",
+    default: "MyPravaah — prove yourself once, and keep the proof",
   },
   description:
-    "MyPravaah turns the financial history you built in one country into a signed credential you own and can present in another. Consent-based, explainable, and deletable at any moment.",
+    "An AI financial-journey copilot for thin-file Indian borrowers: one Account Aggregator consent instead of a document chase, a credit answer that carries its reasons, and a reputation receipt you own and can show the next lender. Consent-based, explainable, and deletable at any moment.",
   applicationName: SITE_CONFIG.name,
   keywords: [
-    "financial reputation passport",
-    "cross-border credit history",
+    "thin-file credit India",
+    "explainable credit decision",
     "Account Aggregator India",
-    "migrant credit score",
-    "India Singapore corridor",
-    "portable credit history",
+    "AI financial copilot",
+    "Hindi loan assistant",
+    "portable credit reputation",
+    "reputation receipt",
     "consent-based financial data",
-    "verifiable credential finance",
   ],
   authors: [{ name: SITE_CONFIG.name, url: BASE_URL }],
   creator: SITE_CONFIG.name,
@@ -41,15 +41,15 @@ export const ROOT_METADATA: Metadata = {
     siteName: SITE_CONFIG.name,
     url: BASE_URL,
     locale: "en_IN",
-    title: "MyPravaah — a financial reputation that crosses the border with you",
+    title: "MyPravaah — prove yourself once, and keep the proof",
     description:
-      "Your credit history dies at the airport. MyPravaah turns it into a credential you own and can present anywhere.",
+      "Refused a loan with no reason given? MyPravaah turns the history you already have into an answer with its reasons, and a receipt you own.",
   },
   twitter: {
     card: "summary_large_image",
-    title: "MyPravaah — a financial reputation that crosses the border with you",
+    title: "MyPravaah — prove yourself once, and keep the proof",
     description:
-      "Your credit history dies at the airport. MyPravaah turns it into a credential you own and can present anywhere.",
+      "Refused a loan with no reason given? MyPravaah turns the history you already have into an answer with its reasons, and a receipt you own.",
   },
   formatDetection: { telephone: false, address: false, email: false },
 };

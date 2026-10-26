@@ -1,7 +1,9 @@
 # pravaah-web
 
-The public marketing and information site for MyPravaah. It explains what the
-product is, how consent and data movement work, how to apply, what protects you,
+The public marketing and information site for MyPravaah — an AI financial-journey
+copilot for thin-file borrowers in India, built for the Paytm ♥ AI Hackathon
+(Build for India · Track 2). It explains the journey, what is built and what is
+in build, how consent and data movement work, how to apply, what protects you,
 and links to the mobile app. It holds no user data, has no authentication, and
 talks to no backend.
 
@@ -24,8 +26,8 @@ From the repo root, `npm run dev` runs every app through Turborepo.
 | Route | Purpose |
 |---|---|
 | `/` | Introduction — the problem, how data reaches us, what you hold, the chain of trust |
-| `/what-is-built` | The build record: all eight modules at depth, the decisions, the runnable checks |
-| `/how-to-apply` | The real identity-check sequence, per corridor |
+| `/what-is-built` | The build record: eight built modules and the three pieces in build, the decisions, the runnable checks |
+| `/how-to-apply` | The real six-check identity sequence |
 | `/security` | How the credential resists forgery; what we do *not* claim |
 | `/privacy` | What is collected, why, for how long, and how you delete it |
 | `/rules` | Product rules in plain English — eligibility, failures, revocation |
@@ -45,9 +47,9 @@ lib/
   config/site.ts   URLs, store plumbing, STAGE, legal placeholders — single source of truth
   constants/       routes and navigation
   content/         page content as data
-    chain.ts         the M0–M7 modules, their status and their rail status
+    chain.ts         the M0–M7 modules + the in-build layer (M8, signals, panel)
     modules.ts       build facts, surfaces, evidence commands, decisions, refusals
-    corridor-checks.ts  the identity sequence, mirrored from the app
+    identity-checks.ts  the India identity sequence, mirrored from the app
     security.ts      note-feature → mechanism ledger, protections, stated gaps
   seo/             metadata builders and structured data
   styles/          Tailwind v4 tokens
@@ -161,28 +163,34 @@ Product truth lives in `PRODUCT.md`. Read both before changing copy or visuals.
 
 ## Content rules
 
-Four constraints this site is built to keep. Breaking one is a correctness bug,
+Five constraints this site is built to keep. Breaking one is a correctness bug,
 not a style preference.
 
-1. **The stage comes from `STAGE`, and both halves are always stated.** All eight
-   modules are built and verified; none of it is a live financial service. No page
+1. **The stage comes from `STAGE`, and every part is always stated.** Eight
+   modules are built and verified; the copilot is in build; none of it is a live
+   financial service. No page
    may put the stage into its own prose — the previous version hardcoded
    "identity and consent in service · scoring and passport in development" into a
    footer, a hero, a close, two legal documents and the app page, and every one of
    those was wrong for as long as it took to build the other six modules.
    `STAGE` lives in `lib/config/site.ts`.
 2. **Module stage and rail stage are separate axes.** `StatusMark` renders whether
-   the module is built; `RailMark` renders whether its regulated third party is
-   the real one (`sandbox` for M0/M1/M4/M5/M6, `none` for M2/M3/M7). Collapsing
-   them into one badge is the specific dishonesty available here. Both fields live
-   on `ChainLink` in `lib/content/chain.ts`.
+   the module is built, in build or roadmap; `RailMark` renders whether its source
+   is the real one (`sandbox` for M0/M1/M4/M5/M6, `synthetic` for the Paytm signal
+   layer, `none` otherwise). Collapsing them into one badge is the specific
+   dishonesty available here. Both fields live on `ChainLink` in
+   `lib/content/chain.ts`. Anything `building` is written in the future tense.
 3. **Unverified specifics are visible placeholders.** Legal entity, address,
    grievance officer, DPO and security contacts are unset. They live in
    `SITE_CONFIG.legal` and render through `<ReplaceBeforeLaunch>` so they cannot
    ship silently. `organisationJsonLd()` omits rather than publishes them.
-4. **The apply sequence must not drift.** `lib/content/corridor-checks.ts`
-   mirrors `REQUIRED_CHECKS` in `apps/pravaah-rn/src/features/kyc/flow.ts`. If
-   the flow changes there, change it here — this page promises an order.
+4. **The apply sequence must not drift.** `lib/content/identity-checks.ts`
+   mirrors `REQUIRED_CHECKS.INDIA` in `apps/pravaah-rn/src/features/kyc/flow.ts`.
+   If the flow changes there, change it here — this page promises an order.
+5. **Paytm is context, never a claim.** The name appears with `CONTEXT.disclaimer`
+   (`lib/config/site.ts`) every time: an independent hackathon entry, not a Paytm
+   product, not affiliated or endorsed. No Singapore, corridor, PayNow or
+   "passport" copy — that framing is retired (PRODUCT.md §Positioning).
 
 A claim of the form "this works" belongs on `/what-is-built` with a command
 beside it. `EVIDENCE` in `lib/content/modules.ts` holds them, and every command

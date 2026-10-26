@@ -49,6 +49,10 @@
     "./fraud": {
       "types": "./dist/fraud/index.d.cts",
       "default": "./dist/fraud/index.cjs"
+    },
+    "./partner": {
+      "types": "./dist/partner/index.d.cts",
+      "default": "./dist/partner/index.cjs"
     }
   },
   "scripts": {

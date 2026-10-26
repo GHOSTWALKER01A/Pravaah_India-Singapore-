@@ -3,6 +3,7 @@
  * bodies from the `/passport` routes.
  */
 import type { Country } from '@/api/kyc/kyc.schema';
+import type { PartnerType } from '@/api/shares/shares.schema';
 
 export type CredentialStatus = 'ISSUED' | 'SUSPENDED' | 'REVOKED' | 'EXPIRED';
 
@@ -144,15 +145,51 @@ export interface PeerRequester {
   identityVerified: boolean;
 }
 
+/**
+ * Where a verifier request is. `CANCELLED` (M7) means the organisation withdrew it — or
+ * PRAVAAH suspended the organisation — before the holder answered. It is told apart from
+ * `EXPIRED` because "they cancelled" and "you ran out of time" are different things to say.
+ */
+export type VerifierRequestStatus =
+  | 'PENDING'
+  | 'APPROVED'
+  | 'DECLINED'
+  | 'EXPIRED'
+  | 'CONSUMED'
+  | 'CANCELLED';
+
+/**
+ * The organisation behind a request, as PRAVAAH vetted it (M7).
+ *
+ * The anti-phishing half of the consent screen. `domain` is the one an admin verified at
+ * approval, not anything the organisation typed into the request; `retentionDays` is the
+ * promise the holder's consent receipt will record.
+ */
+export interface VerifierProfile {
+  name: string;
+  domain: string | null;
+  type: PartnerType;
+  trustLevel: 'STANDARD' | 'HIGH';
+  country: string | null;
+  retentionDays: number;
+  /** False once PRAVAAH has suspended the organisation. The request is then not answerable. */
+  approved: boolean;
+}
+
 /** A verifier's request, as the consent-to-disclose screen needs it. */
 export interface VerifierRequestDetail {
   requestId: string;
-  status: 'PENDING' | 'APPROVED' | 'DECLINED' | 'EXPIRED' | 'CONSUMED';
+  status: VerifierRequestStatus;
   open: boolean;
   verifier: string;
   verifierCountry: string | null;
   /** Present only on a peer check. Null when an institution is asking. */
   requester: PeerRequester | null;
+  /**
+   * Present only when a registered organisation is asking. Optional because a backend
+   * older than M7 does not send it — the screen then falls back to `verifier`.
+   */
+  verifierProfile?: VerifierProfile | null;
   purpose: string;
   template: string | null;
   channel: PresentationChannel;

@@ -14,7 +14,17 @@ import { cn } from "@/lib/utils";
  * rail behind it is the real one, which is a different axis — so module stage
  * is `StatusMark` and rail stage is {@link RailMark}, and neither is allowed to
  * stand in for the other.
+ *
+ * The Paytm build reopened the first axis: the copilot and its two thin layers
+ * are being built, so "In build" is back — struck hollow and in the second
+ * colour, so a reader can tell at a glance which rows describe running code.
  */
+const LABEL: Record<ModuleStatus, string> = {
+  built: "Built · verified",
+  building: "In build",
+  roadmap: "Roadmap",
+};
+
 export function StatusMark({
   status,
   tone = "rag",
@@ -47,7 +57,7 @@ export function StatusMark({
           built ? "bg-current" : "border border-current bg-transparent",
         )}
       />
-      {built ? "Built · verified" : "Being built"}
+      {LABEL[status]}
     </span>
   );
 }
@@ -60,6 +70,9 @@ export function StatusMark({
  * sandbox mark are the rows with something outstanding. The second colour is
  * used because that is the fact a reader deciding whether to trust this must
  * not skim past.
+ *
+ * `synthetic` says the module runs on seeded data standing in for a source we
+ * have no access to — a different limitation from a sandbox, and named as one.
  */
 export function RailMark({
   rail,
@@ -82,7 +95,7 @@ export function RailMark({
         className,
       )}
     >
-      Sandbox rail
+      {rail === "synthetic" ? "Synthetic data" : "Sandbox rail"}
     </span>
   );
 }

@@ -1,11 +1,72 @@
+import Constants from 'expo-constants';
+
 /**
  * Backend API endpoints (pravaah-be). Paths mirror the NestJS routes:
  * global prefix `api` + URI version `v1`. Base URL comes from the
- * EXPO_PUBLIC_API_URL env var (inlined by Expo at build time).
+ * EXPO_PUBLIC_API_URL env var (inlined by Expo at build time), corrected in
+ * development by {@link resolveApiBaseUrl}.
  */
-export const API_BASE_URL = (
+const CONFIGURED_API_URL = (
   process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8000'
 ).replace(/\/$/, '');
+
+/** `http://host:port/path` → parts. A regex, not `URL`: RN's URL cannot set `hostname`. */
+const URL_PARTS = /^(https?:\/\/)([^/:?#]+)(:\d+)?(.*)$/i;
+
+function isLoopback(host: string): boolean {
+  return host === 'localhost' || host.startsWith('127.') || host === '::1';
+}
+
+/** Loopback or RFC 1918 — an address that only means something on this network. */
+function isLocalNetworkHost(host: string): boolean {
+  if (isLoopback(host)) return true;
+  const [a, b] = host.split('.').map(Number);
+  return (
+    a === 10 ||
+    (a === 192 && b === 168) ||
+    (a === 172 && b !== undefined && b >= 16 && b <= 31)
+  );
+}
+
+/** The host this dev build loaded its JavaScript from, e.g. `10.204.154.92`. */
+function metroHost(): string | null {
+  const hostUri = Constants.expoConfig?.hostUri; // "10.204.154.92:8081"
+  if (!hostUri || hostUri.startsWith('[')) return null; // no IPv6 literals
+  return hostUri.split(':')[0] || null;
+}
+
+/**
+ * The API base URL, healed against a changed Wi-Fi network in development.
+ *
+ * `EXPO_PUBLIC_API_URL` holds this PC's LAN IP, and a new network or DHCP lease
+ * changes that IP — the app then fails every request with "Can't reach the server"
+ * even though nothing is wrong with the backend. But a development build has just
+ * loaded its bundle from Metro on the PC's CURRENT address, and the backend runs on
+ * that same PC, so Metro's host is the right one.
+ *
+ * Applied only when all of these hold, so nothing real is ever redirected:
+ *  - a development build (release APKs have no Metro and keep the configured URL);
+ *  - the configured host is loopback or a private LAN address (a real staging or
+ *    production URL is never rewritten);
+ *  - Metro was NOT reached over loopback — that is `adb reverse`, where the
+ *    configured URL is already the right one.
+ * The port and path of the configured URL are kept; only the host changes.
+ */
+function resolveApiBaseUrl(): string {
+  if (!__DEV__) return CONFIGURED_API_URL;
+  const parts = URL_PARTS.exec(CONFIGURED_API_URL);
+  const dev = metroHost();
+  if (!parts || !dev || isLoopback(dev)) return CONFIGURED_API_URL;
+
+  const [, scheme, host, port = '', rest = ''] = parts;
+  if (!host || !isLocalNetworkHost(host) || host === dev) return CONFIGURED_API_URL;
+
+  const healed = `${scheme}${dev}${port}${rest}`;
+  console.info(`[api] ${CONFIGURED_API_URL} is stale on this network — using ${healed}`);
+  return healed;
+}
+
+export const API_BASE_URL = resolveApiBaseUrl();
 
 export const API_ENDPOINTS = {
   AUTH: {
@@ -77,6 +138,19 @@ export const API_ENDPOINTS = {
     CARD_NFC_WRITTEN: '/card/nfc-written',
     CARD_LOST: '/card/lost',
     REVOKE: (id: string) => `/credentials/${id}/revoke`,
+  },
+  /**
+   * M7 consent receipts — "who has seen my passport". Mirrors HOLDER_SHARES_ROUTES in
+   * apps/pravaah-be/src/modules/partner/partner.route.ts. A separate base from PASSPORT
+   * because the backend serves it from a separate controller (the partner module), even
+   * though the path sits under `/passport`.
+   */
+  SHARES: {
+    BASE: 'api/v1/passport/shares',
+    LIST: '',
+    DETAIL: (receiptId: string) => `/${receiptId}`,
+    BY_REQUEST: (requestId: string) => `/by-request/${requestId}`,
+    WITHDRAW: (receiptId: string) => `/${receiptId}/withdraw`,
   },
   // Mirrors PAYMENT_ROUTES in apps/pravaah-be/src/modules/payments/payments.route.ts
   PAYMENTS: {

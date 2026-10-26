@@ -18,7 +18,7 @@ import { Legend } from "@/ui/primitives/Legend";
 export const metadata: Metadata = pageMetadata({
   title: "What is built",
   description:
-    "All eight MyPravaah modules in full — identity, consent, scoring, the issued credential, verification, payments, insurance and the fraud engine — what each one does, what the holder gets, what is still outstanding, and the commands that prove it.",
+    "The eight built MyPravaah modules in full — identity, consent, scoring, the reputation receipt, panel verification, payments, insurance and the fraud engine — plus the AI copilot and the two layers being built around it, what is still outstanding, and the commands that prove it.",
   path: ROUTES.WHAT_IS_BUILT,
 });
 
@@ -33,8 +33,9 @@ export const metadata: Metadata = pageMetadata({
  * (the decisions, the runnable checks).
  *
  * It opens with the limitation rather than the achievement. A page that says
- * "eight of eight complete" and defers the licensing position to a footer has
- * chosen to be misread, and this is the audience least able to afford that.
+ * "eight modules complete" and defers the licensing position — or the fact that
+ * the copilot is not built — to a footer has chosen to be misread, and this is
+ * the audience least able to afford that.
  */
 export default function WhatIsBuiltPage(): ReactElement {
   return (
@@ -52,16 +53,17 @@ export default function WhatIsBuiltPage(): ReactElement {
           <Legend className="text-latent">The build · stated in full</Legend>
 
           <h1 className="denomination mt-8 max-w-4xl text-[2.5rem] text-reverse sm:text-6xl lg:text-[4.25rem]">
-            Eight modules, finished. Nothing you can use today.
+            Eight modules finished. One in build. Nothing you can use today.
           </h1>
 
           <p className="mt-8 max-w-2xl text-base leading-relaxed text-reverse-dim sm:text-lg">
-            Both halves of that sentence are true and neither cancels the other.
-            The system is complete and exercised end to end against a real
-            database. It is also not a licensed financial service, so it moves no
-            real money and issues no policy that is in force. This page separates
-            those two facts rather than averaging them into something more
-            flattering.
+            All three parts of that sentence are true and none cancels another.
+            The engine is complete and exercised end to end against a real
+            database. The AI copilot that will run it as one conversation is
+            being built, and is described here in the future tense. And none of
+            it is a licensed financial service, so it moves no real money and
+            issues no policy that is in force. This page separates those facts
+            rather than averaging them into something more flattering.
           </p>
 
           {/* The data-field grid a note prints along its base — with each
@@ -89,7 +91,7 @@ export default function WhatIsBuiltPage(): ReactElement {
         </Container>
 
         <Microtext
-          text="EIGHT MODULES BUILT · NO LICENCE HELD · NO REAL MONEY MOVED · NO POLICY IN FORCE"
+          text="EIGHT MODULES BUILT · COPILOT IN BUILD · NO LICENCE HELD · NO REAL MONEY MOVED · NO POLICY IN FORCE"
           repeat={14}
           className="mt-16 px-5 pb-1 text-latent-line/50 sm:px-8 lg:px-12"
         />
@@ -112,6 +114,9 @@ export default function WhatIsBuiltPage(): ReactElement {
               <Legend className="text-carmine">What is not real</Legend>
               <p className="mt-6 text-base leading-relaxed text-ink sm:text-lg">
                 {STAGE.pending}
+              </p>
+              <p className="mt-5 text-[0.9375rem] leading-relaxed text-ink">
+                {STAGE.building}
               </p>
               <p className="mt-5 text-[0.9375rem] leading-relaxed text-carmine-deep">
                 {STAGE.release}
@@ -241,9 +246,10 @@ export default function WhatIsBuiltPage(): ReactElement {
             </Legend>
             <p className="denomination mt-8 text-[1.75rem] leading-[1.15] text-reverse sm:text-[2.5rem]">
               The interesting question was never whether the features exist. It
-              was whether a stranger can check your credential without calling
-              us, and whether you can take your data back.{" "}
-              <span className="text-latent">Both are answered.</span>
+              was whether a lender can check your receipt without calling us,
+              whether a refusal arrives with its reason, and whether you can take
+              your data back.{" "}
+              <span className="text-latent">All three are answered.</span>
             </p>
 
             <div className="mt-12 flex flex-col gap-3 sm:flex-row sm:items-center">

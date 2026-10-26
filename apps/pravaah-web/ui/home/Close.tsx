@@ -27,11 +27,10 @@ export function Close(): ReactElement {
           <Legend className="text-latent">The whole thing, in one sentence</Legend>
 
           <p className="denomination mt-9 text-[2rem] leading-[1.1] text-reverse sm:text-[2.875rem] lg:text-[3.5rem]">
-            We are not building a payments app. We are building the thing that
-            lets a person&rsquo;s financial reputation cross a border with them
-            &mdash;{" "}
+            We don&rsquo;t lend and we don&rsquo;t underwrite. We make the road
+            to a lender&rsquo;s decision honest &mdash;{" "}
             <span className="text-latent">
-              consented, explainable, and owned by the user.
+              proved once, with the proof kept by the person it belongs to.
             </span>
           </p>
 

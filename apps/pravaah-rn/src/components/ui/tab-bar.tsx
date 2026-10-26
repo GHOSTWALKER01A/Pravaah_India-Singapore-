@@ -23,7 +23,9 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
+// From expo-router's vendored React Navigation — it no longer depends on the upstream
+// `@react-navigation/bottom-tabs`, so that package is not guaranteed to be installed.
+import type { BottomTabBarProps } from 'expo-router/tabs';
 
 import {
   Elevation,

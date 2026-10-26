@@ -1,0 +1,420 @@
+########################################################################
+# PRAVAAH · M7 — The Partner Console (relying-party side · closes the loop)
+#
+# VS Code "REST Client" / JetBrains HTTP client.  Base = /api/v1/...
+#
+# M3 built the handshake: a verifier opens a request, the holder approves on
+# their device, the verifier collects a cryptographically verified result.
+# M7 turns that into verification-as-a-service: partner onboarding and
+# approval, scoped + rotatable API keys, PREDICATES ("band ≥ GOOD" answered
+# with an issuer-signed boolean), consent receipts the holder can withdraw,
+# underwriting decisions, signed webhooks, metering, and a trust registry.
+#
+# ─── FIVE SURFACES, FIVE AUTH MODELS ──────────────────────────────────────
+#
+#   /partner/...          partner API key   (x-pravaah-partner-key or Bearer pvk_…)
+#   /partner-console/...  console user JWT  (ordinary OTP login + PartnerUser row)
+#   /partners/apply       public, throttled (5/hour/IP)
+#   /passport/shares/...  holder JWT        ("who has seen my passport")
+#   /admin/partners/...   admin JWT         (approve / suspend / revoke / policy)
+#   /admin/trust-registry admin JWT
+#
+# ─── WHAT CANNOT BE DONE FROM THIS FILE ───────────────────────────────────
+#
+# Approving a request needs a KB-JWT signed by the HOLDER'S DEVICE KEY (see
+# m3-passport.http). So §2 opens a request here, and the holder approves it in
+# the RN wallet (it lands in their inbox / scan the QR). Everything after —
+# receipts, webhooks, usage, decisions, withdrawal — is then driveable here.
+#
+# ─── PREREQUISITES ────────────────────────────────────────────────────────
+#
+#   • `npm run prisma:push` — M7 adds 8 tables and columns on VerifierPartner /
+#     VerifierRequest. (Watch for a push that stops partway on a unique
+#     constraint — see the M6 note about `--accept-data-loss`.)
+#   • `npm run prisma:seed` — makes "Acme Bank (dev)" ACTIVE with full scope
+#     (M7 scope enforcement fails CLOSED: an empty scope can request nothing),
+#     and a console user risk@acme.example / +6590000001.
+########################################################################
+
+@baseUrl = http://localhost:8000/api/v1
+@contentType = application/json
+
+# ── paste after logging in ──────────────────────────────────────────────
+@accessToken  = PASTE_VERIFIED_HOLDER_JWT
+@consoleToken = PASTE_PARTNER_CONSOLE_USER_JWT
+@adminToken   = PASTE_ADMIN_JWT
+
+# ── paste from responses ────────────────────────────────────────────────
+@partnerId  = PASTE_PARTNER_ID
+@requestId  = PASTE_VERIFICATION_REQUEST_ID
+@receiptId  = PASTE_CONSENT_RECEIPT_ID
+@keyId      = PASTE_PARTNER_API_KEY_ID
+@templateId = PASTE_TEMPLATE_ID
+@entryId    = PASTE_TRUST_REGISTRY_ENTRY_ID
+@holderPvh  = PASTE_HOLDER_PRAVAAH_ID
+
+# The seeded M3 bootstrap key (full scope). §4 issues scoped M7 keys.
+@partnerKey = pvk_dev_acme_bank_do_not_use_in_production
+
+
+########################################################################
+# 1 · Onboarding — a relying party applies                   (public)
+########################################################################
+
+### 1.1 Apply. Creates the partner PENDING_APPROVAL with NO scope, plus its first
+# console user (PARTNER_ADMIN). The audience is DERIVED from the domain.
+POST {{baseUrl}}/partners/apply
+Content-Type: {{contentType}}
+
+{
+  "name": "Lion City Lending",
+  "type": "LENDER",
+  "domain": "lioncity-lending.example.sg",
+  "country": "SG",
+  "contactName": "Mei Tan",
+  "contactEmail": "mei.tan@lioncity-lending.example.sg",
+  "contactPhone": "+6591234567",
+  "requestedScopes": ["score_at_least_good", "kyc_level", "given_name"],
+  "useCase": "Pre-qualify Indian migrant workers in Singapore for small personal loans."
+}
+
+### 1.2 Same domain again → 409, without saying WHICH field collided.
+POST {{baseUrl}}/partners/apply
+Content-Type: {{contentType}}
+
+{
+  "name": "Lookalike",
+  "type": "LENDER",
+  "domain": "lioncity-lending.example.sg",
+  "country": "SG",
+  "contactName": "X",
+  "contactEmail": "x@example.com",
+  "requestedScopes": ["score_value"],
+  "useCase": "Trying to squat on an existing audience string."
+}
+
+
+########################################################################
+# 2 · Admin — review, approve, set policy                     (admin JWT)
+########################################################################
+
+### 2.1 The queue. Applicants sort first.
+GET {{baseUrl}}/admin/partners?status=PENDING_APPROVAL
+Authorization: Bearer {{adminToken}}
+
+### 2.2 Detail: requested scopes + use case, health, usage, keys, team.
+GET {{baseUrl}}/admin/partners/{{partnerId}}
+Authorization: Bearer {{adminToken}}
+
+### 2.3 Approve (ADMIN). allowedScopes is the ceiling on every request it will
+# ever make — may be narrower than what it asked for.
+POST {{baseUrl}}/admin/partners/{{partnerId}}/approve
+Authorization: Bearer {{adminToken}}
+Content-Type: {{contentType}}
+
+{
+  "allowedScopes": ["score_at_least_good", "score_at_least_very_good", "kyc_level"],
+  "trustLevel": "STANDARD",
+  "retentionDays": 30,
+  "note": "Approved for threshold checks only; no raw score, no identity fields."
+}
+
+### 2.4 Approving twice → 409 (CAS on status).
+POST {{baseUrl}}/admin/partners/{{partnerId}}/approve
+Authorization: Bearer {{adminToken}}
+Content-Type: {{contentType}}
+
+{ "allowedScopes": ["score_at_least_good"] }
+
+### 2.5 Bootstrap a key for them (ADMIN). Plaintext shown ONCE.
+POST {{baseUrl}}/admin/partners/{{partnerId}}/api-keys
+Authorization: Bearer {{adminToken}}
+Content-Type: {{contentType}}
+
+{ "label": "Production", "scopes": ["score_at_least_good", "kyc_level"], "rateLimitPerMin": 60 }
+
+### 2.6 A key with a scope the partner was NOT approved for → 400.
+POST {{baseUrl}}/admin/partners/{{partnerId}}/api-keys
+Authorization: Bearer {{adminToken}}
+Content-Type: {{contentType}}
+
+{ "label": "Overreach", "scopes": ["score_value"] }
+
+### 2.7 Narrow policy later. Every key narrows with it on its next call.
+PATCH {{baseUrl}}/admin/partners/{{partnerId}}/policy
+Authorization: Bearer {{adminToken}}
+Content-Type: {{contentType}}
+
+{ "allowedScopes": ["score_at_least_good"], "reason": "Business review: kyc_level not needed for this product." }
+
+### 2.8 Suspend (ADMIN or SENIOR_REVIEWER — the emergency brake). Keys stop at
+# once (403), every open request is cancelled.
+POST {{baseUrl}}/admin/partners/{{partnerId}}/suspend
+Authorization: Bearer {{adminToken}}
+Content-Type: {{contentType}}
+
+{ "reason": "Abnormal request volume against unrelated holders — investigating." }
+
+### 2.9 Reinstate (ADMIN).
+POST {{baseUrl}}/admin/partners/{{partnerId}}/reinstate
+Authorization: Bearer {{adminToken}}
+Content-Type: {{contentType}}
+
+{ "reason": "Investigation closed: traffic was a load test on their side." }
+
+### 2.10 Revoke (ADMIN). TERMINAL — burns every key, cancels open requests.
+# POST {{baseUrl}}/admin/partners/{{partnerId}}/revoke
+# Authorization: Bearer {{adminToken}}
+# Content-Type: {{contentType}}
+#
+# { "reason": "Contract terminated." }
+
+### 2.11 Platform overview: approval queue + this period's billable volume.
+GET {{baseUrl}}/admin/partners/overview
+Authorization: Bearer {{adminToken}}
+
+
+########################################################################
+# 3 · The verification — the money-shot                  (partner API key)
+########################################################################
+
+### 3.1 Who am I, and what may this key ask for?
+GET {{baseUrl}}/partner/me
+x-pravaah-partner-key: {{partnerKey}}
+
+### 3.2 Open a PREDICATE request: "band ≥ GOOD" — the holder discloses ONE
+# issuer-signed boolean, never the band or the score. Idempotency-Key makes a
+# retry return the SAME request instead of prompting the holder twice.
+# The holder approves it in the wallet ([NEEDS DEVICE]).
+POST {{baseUrl}}/partner/verifications
+x-pravaah-partner-key: {{partnerKey}}
+Idempotency-Key: loan-app-000042-attempt-1
+Content-Type: {{contentType}}
+
+{
+  "predicates": [{ "claim": "score_band", "op": "GTE", "value": "GOOD" }],
+  "requestedClaims": ["kyc_level"],
+  "purpose": "Pre-check for a SGD 2,000 personal loan",
+  "pravaahId": "{{holderPvh}}",
+  "externalRef": "LOAN-000042",
+  "ttlSeconds": 300
+}
+
+### 3.3 Replay with the same Idempotency-Key → same requestId, `replayed: true`.
+POST {{baseUrl}}/partner/verifications
+x-pravaah-partner-key: {{partnerKey}}
+Idempotency-Key: loan-app-000042-attempt-1
+Content-Type: {{contentType}}
+
+{
+  "predicates": [{ "claim": "score_band", "op": "GTE", "value": "GOOD" }],
+  "purpose": "Pre-check for a SGD 2,000 personal loan",
+  "pravaahId": "{{holderPvh}}"
+}
+
+### 3.4 An OPEN request (no holder named) — show `holderLink` as a QR at the counter.
+POST {{baseUrl}}/partner/verifications
+x-pravaah-partner-key: {{partnerKey}}
+Content-Type: {{contentType}}
+
+{ "template": "DOMESTIC_MICRO_LOAN", "channel": "QR", "externalRef": "WALKIN-7" }
+
+### 3.5 A predicate that proves nothing ("≥ POOR" is true for everyone) → 400.
+POST {{baseUrl}}/partner/verifications
+x-pravaah-partner-key: {{partnerKey}}
+Content-Type: {{contentType}}
+
+{ "predicates": [{ "claim": "score_band", "op": "GTE", "value": "POOR" }], "purpose": "Pointless check" }
+
+### 3.6 Poll. After the holder approves: `result.predicates` =
+# { "score_band:GTE:GOOD": true } — or null if they withheld it (never false).
+# Reading an approved result COLLECTS it (burns the nonce), as M3's poll does.
+GET {{baseUrl}}/partner/verifications/{{requestId}}
+x-pravaah-partner-key: {{partnerKey}}
+
+### 3.7 List, filtered by your own reference.
+GET {{baseUrl}}/partner/verifications?externalRef=LOAN-000042
+x-pravaah-partner-key: {{partnerKey}}
+
+### 3.8 Record the underwriting decision — closes the audit loop.
+POST {{baseUrl}}/partner/verifications/{{requestId}}/decision
+x-pravaah-partner-key: {{partnerKey}}
+Content-Type: {{contentType}}
+
+{ "decision": "APPROVED", "reasonCode": "BAND_GOOD_OR_BETTER", "metadata": { "offerSgd": 2000 } }
+
+### 3.9 Revise it — allowed, never silent: `revision` increments, audit keeps both.
+POST {{baseUrl}}/partner/verifications/{{requestId}}/decision
+x-pravaah-partner-key: {{partnerKey}}
+Content-Type: {{contentType}}
+
+{ "decision": "REFERRED", "reasonCode": "MANUAL_REVIEW", "reason": "Income docs requested." }
+
+### 3.10 Cancel a still-pending request.
+POST {{baseUrl}}/partner/verifications/{{requestId}}/cancel
+x-pravaah-partner-key: {{partnerKey}}
+Content-Type: {{contentType}}
+
+{ "reason": "Applicant withdrew the loan application." }
+
+### 3.11 Direct verification (OpenID4VP direct_post the partner received itself).
+# Trust registry → full M3 pipeline (audience forced to yours) → scope → the
+# nonce is BURNT. Send the same presentation twice: the 2nd is REPLAY_SUSPECTED.
+POST {{baseUrl}}/partner/presentations/verify
+x-pravaah-partner-key: {{partnerKey}}
+Content-Type: {{contentType}}
+
+{
+  "presentation": "PASTE_COMBINED_SD_JWT~DISCLOSURE~KB_JWT",
+  "expectedNonce": "PASTE_THE_NONCE_YOU_ISSUED_16+_CHARS",
+  "predicates": [{ "claim": "score_band", "op": "GTE", "value": "GOOD" }]
+}
+
+### 3.12 Usage — the invoice preview. Only VERIFIED events are billable.
+GET {{baseUrl}}/partner/usage
+x-pravaah-partner-key: {{partnerKey}}
+
+### 3.13 No key → 401. A user session JWT is not a partner key → 401.
+GET {{baseUrl}}/partner/me
+Authorization: Bearer {{accessToken}}
+
+
+########################################################################
+# 4 · The partner console                          (console user JWT)
+#   Sign in with the ordinary OTP login as the seeded console user.
+########################################################################
+
+### 4.1 Session: user + role + partner profile.
+GET {{baseUrl}}/partner-console/me
+Authorization: Bearer {{consoleToken}}
+
+### 4.2 Request builder catalogue — every claim marked in/out of scope.
+GET {{baseUrl}}/partner-console/catalogue
+Authorization: Bearer {{consoleToken}}
+
+### 4.3 Issue a scoped key (ADMIN role). Shown ONCE.
+POST {{baseUrl}}/partner-console/api-keys
+Authorization: Bearer {{consoleToken}}
+Content-Type: {{contentType}}
+
+{ "label": "Loan origination service", "scopes": ["score_at_least_good"], "rateLimitPerMin": 120 }
+
+### 4.4 Rotate with a 24h grace — both keys work until then.
+POST {{baseUrl}}/partner-console/api-keys/{{keyId}}/rotate
+Authorization: Bearer {{consoleToken}}
+Content-Type: {{contentType}}
+
+{ "graceHours": 24 }
+
+### 4.5 Revoke (leaked key).
+POST {{baseUrl}}/partner-console/api-keys/{{keyId}}/revoke
+Authorization: Bearer {{consoleToken}}
+Content-Type: {{contentType}}
+
+{ "reason": "Committed to a public repo by mistake." }
+
+### 4.6 Set the webhook endpoint.
+PATCH {{baseUrl}}/partner-console/profile
+Authorization: Bearer {{consoleToken}}
+Content-Type: {{contentType}}
+
+{ "webhookUrl": "https://webhook.site/your-uuid" }
+
+### 4.7 Mint the signing secret (shown once). Verify deliveries as
+# hex(HMAC-SHA256(secret, `${x-pravaah-timestamp}.${rawBody}`)).
+POST {{baseUrl}}/partner-console/webhook/secret/rotate
+Authorization: Bearer {{consoleToken}}
+
+### 4.8 Send a signed test delivery, synchronously.
+POST {{baseUrl}}/partner-console/webhook/test
+Authorization: Bearer {{consoleToken}}
+
+### 4.9 Delivery log (DEAD ones can be redelivered).
+GET {{baseUrl}}/partner-console/webhook/deliveries
+Authorization: Bearer {{consoleToken}}
+
+### 4.10 Save a template.
+POST {{baseUrl}}/partner-console/templates
+Authorization: Bearer {{consoleToken}}
+Content-Type: {{contentType}}
+
+{
+  "name": "SG personal loan pre-check",
+  "purpose": "Confirm you clear our minimum reputation bar for a small loan.",
+  "claims": [],
+  "predicates": [{ "claim": "score_band", "op": "GTE", "value": "GOOD" }]
+}
+
+### 4.11 Open a verification from a template (ANALYST role).
+POST {{baseUrl}}/partner-console/verifications
+Authorization: Bearer {{consoleToken}}
+Content-Type: {{contentType}}
+
+{ "templateId": "{{templateId}}", "pravaahId": "{{holderPvh}}", "externalRef": "LOAN-000043" }
+
+### 4.12 Verifications list + decision filter.
+GET {{baseUrl}}/partner-console/verifications?decision=APPROVED
+Authorization: Bearer {{consoleToken}}
+
+### 4.13 Usage + billable line items.
+GET {{baseUrl}}/partner-console/usage/line-items
+Authorization: Bearer {{consoleToken}}
+
+### 4.14 Team: invite an analyst (ADMIN role).
+POST {{baseUrl}}/partner-console/users
+Authorization: Bearer {{consoleToken}}
+Content-Type: {{contentType}}
+
+{ "email": "analyst@acme.example", "phone": "+6590000002", "name": "Acme Analyst", "role": "PARTNER_ANALYST" }
+
+
+########################################################################
+# 5 · The holder — "who has seen my passport"             (holder JWT)
+########################################################################
+
+### 5.1 Every share: who, what (claim NAMES), why, retention, status.
+GET {{baseUrl}}/passport/shares
+Authorization: Bearer {{accessToken}}
+
+### 5.2 The receipt for a request just approved (the "shared ✓" screen).
+GET {{baseUrl}}/passport/shares/by-request/{{requestId}}
+Authorization: Bearer {{accessToken}}
+
+### 5.3 Withdraw. Redacts the cached disclosure (the partner's §3.6 now shows
+# dataStatus: REDACTED) and sends the partner `consent.withdrawn`.
+POST {{baseUrl}}/passport/shares/{{receiptId}}/withdraw
+Authorization: Bearer {{accessToken}}
+Content-Type: {{contentType}}
+
+{}
+
+### 5.4 Withdraw again → 409.
+POST {{baseUrl}}/passport/shares/{{receiptId}}/withdraw
+Authorization: Bearer {{accessToken}}
+Content-Type: {{contentType}}
+
+{}
+
+
+########################################################################
+# 6 · Trust registry                                        (admin JWT)
+########################################################################
+
+### 6.1 PRAVAAH's own did:web is registered automatically on boot (isSelf).
+GET {{baseUrl}}/admin/trust-registry
+Authorization: Bearer {{adminToken}}
+
+### 6.2 Accept a cross-border issuer (the explicit, auditable trust decision).
+POST {{baseUrl}}/admin/trust-registry
+Authorization: Bearer {{adminToken}}
+Content-Type: {{contentType}}
+
+{ "issuerDid": "did:web:issuer.example.sg", "issuerName": "Example SG Issuer", "country": "SG", "jwksUri": "https://issuer.example.sg/.well-known/jwks.json" }
+
+### 6.3 Kill switch: distrust an issuer. Every verification naming it now fails
+# closed within 30s — without touching a single credential.
+PATCH {{baseUrl}}/admin/trust-registry/{{entryId}}
+Authorization: Bearer {{adminToken}}
+Content-Type: {{contentType}}
+
+{ "accepted": false, "note": "Suspected key compromise — incident INC-311." }

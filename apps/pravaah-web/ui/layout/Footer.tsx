@@ -3,7 +3,7 @@ import type { ReactElement } from "react";
 
 import {
   APP_IS_PUBLISHED,
-  CORRIDOR,
+  MARKET,
   SITE_CONFIG,
   STAGE,
   buildOpenAppHref,
@@ -40,8 +40,7 @@ export function Footer(): ReactElement {
               </p>
             </div>
             <p className="mt-6 max-w-xs text-sm leading-relaxed text-reverse-dim">
-              {SITE_CONFIG.tagline} Built for the {CORRIDOR.from.name} ↔{" "}
-              {CORRIDOR.to.name} corridor.
+              {SITE_CONFIG.tagline} Built for {MARKET.name}.
             </p>
 
             <Link
@@ -119,10 +118,7 @@ export function Footer(): ReactElement {
                 and consent in service · scoring and passport in development"
                 for as long as it took the other six modules to be finished,
                 which is exactly the drift a hardcoded stage produces. */}
-            <p className="legend text-reverse-dim">
-              {STAGE.modulesBuilt} of {STAGE.modulesTotal} modules built · no
-              licence held · app unreleased
-            </p>
+            <p className="legend text-reverse-dim">{STAGE.short}</p>
           </div>
         </div>
       </div>

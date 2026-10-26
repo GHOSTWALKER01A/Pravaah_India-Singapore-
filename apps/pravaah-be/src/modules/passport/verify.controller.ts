@@ -30,12 +30,13 @@ import {
   type VerifyPresentationDto,
 } from '@pravaah/schema'
 
-import { PartnerApiKeyGuard } from '@/common/guards/partner-api-key.guard'
+import {
+  PartnerApiKeyGuard,
+  type PartnerAuthContext,
+} from '@/common/guards/partner-api-key.guard'
 import { ZodValidationPipe } from '@/common/pipes/zod-validation.pipes'
 import { UUIDValidationPipe } from '@/common/pipes/uuid-validation.pipe'
 import { ResponseBuilder } from '@/utils/response-builder'
-
-import type { VerifierPartner } from 'generated/prisma/client'
 
 import { PassportConfig } from '@/modules/passport/passport.config'
 import { VERIFY_ROUTES } from '@/modules/passport/passport.route'
@@ -89,7 +90,7 @@ export class VerifyController {
   async verifyPresentation(
     @Body(new ZodValidationPipe(VerifyPresentationSchema))
     dto: VerifyPresentationDto,
-    @Req() req: { partner: VerifierPartner },
+    @Req() req: PartnerAuthContext,
   ) {
     const result = await this.verification.verify({
       presentation: dto.presentation,
@@ -137,9 +138,12 @@ export class VerifyController {
   async createRequest(
     @Body(new ZodValidationPipe(CreateVerifierRequestSchema))
     dto: CreateVerifierRequestDto,
-    @Req() req: { partner: VerifierPartner },
+    @Req() req: PartnerAuthContext,
   ) {
-    const data = await this.sessions.createRequest(dto, req.partner)
+    const data = await this.sessions.createRequest(dto, req.partner, {
+      scopes: req.partnerScopes,
+      apiKeyId: req.partnerApiKey?.id ?? null,
+    })
     return ResponseBuilder.success(
       data,
       'Request opened — waiting for the holder to approve',
@@ -158,7 +162,7 @@ export class VerifyController {
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
   async fromCard(
     @Param('cardRef') cardRef: string,
-    @Req() req: { partner: VerifierPartner },
+    @Req() req: PartnerAuthContext,
     @Query('template') template?: string,
   ) {
     const parsed = PresentationTemplateIdSchema.safeParse(template)
@@ -166,6 +170,7 @@ export class VerifyController {
       cardRef,
       req.partner,
       parsed.success ? parsed.data : undefined,
+      { scopes: req.partnerScopes, apiKeyId: req.partnerApiKey?.id ?? null },
     )
     return ResponseBuilder.success(
       data,
@@ -178,7 +183,7 @@ export class VerifyController {
   @UseGuards(ThrottlerGuard, PartnerApiKeyGuard)
   async requestResult(
     @Param('requestId', new UUIDValidationPipe()) requestId: string,
-    @Req() req: { partner: VerifierPartner },
+    @Req() req: PartnerAuthContext,
   ) {
     const data = await this.sessions.result(requestId, req.partner)
     return ResponseBuilder.success(data, 'Request status')

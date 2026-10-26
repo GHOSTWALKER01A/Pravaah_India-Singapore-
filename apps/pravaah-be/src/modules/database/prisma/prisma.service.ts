@@ -25,6 +25,7 @@ export class PrismaService
 {
   private readonly logger = new Logger(PrismaService.name)
   private readonly pool: Pool
+  private readonly poolMax: number
 
   constructor(configService: ConfigService) {
     const databaseUrl = configService.get<string>(ENV.DATABASE.URL)
@@ -32,24 +33,30 @@ export class PrismaService
       throw new Error('DATABASE_URL is not defined in environment variables')
     }
 
-    const url = new URL(databaseUrl)
-    const maxStr = url.searchParams.get('connection_limit')
-    const max = maxStr ? parseInt(maxStr, 10) : 50
+    const max = poolSizeFor(databaseUrl)
 
     const pool = new Pool({
       connectionString: databaseUrl,
       max,
+      // Release idle clients promptly, so the pooler slots go back between bursts.
+      idleTimeoutMillis: 10_000,
+      // node-postgres waits FOREVER for a free client by default. With a capped pool
+      // a starved query must fail loudly instead of hanging a cron or a request.
+      connectionTimeoutMillis: 20_000,
     })
 
     const adapter = new PrismaPg(pool)
     super({ adapter })
     this.pool = pool
+    this.poolMax = max
   }
 
   async onModuleInit(): Promise<void> {
     try {
       await this.$connect()
-      this.logger.log('✅ Database connected successfully')
+      this.logger.log(
+        `✅ Database connected successfully (pool max ${this.poolMax})`,
+      )
     } catch (error) {
       this.logger.error('❌ Database connection failed', error)
       throw error
@@ -61,4 +68,27 @@ export class PrismaService
     await this.pool.end()
     this.logger.log('Database disconnected')
   }
+}
+
+/**
+ * The pool's ceiling. `?connection_limit=N` in DATABASE_URL wins; otherwise 10.
+ *
+ * NOT a performance knob — a hard budget. The Supabase SESSION-mode pooler (port 5432,
+ * which this app needs — see backend-conventions) admits only `pool_size` client
+ * connections per database user, 15 on this project, shared by EVERY client: this
+ * process, Prisma CLI (`db push`, migrate diff), ad-hoc tsx scripts, a second
+ * instance, a deployed copy. The default used to be 50, and at :00/:30 about twenty
+ * cron jobs fire in the same second, many with `Promise.all` — the pool grew past 15
+ * and the pooler refused the overflow with EMAXCONNSESSION, failing unrelated jobs
+ * at once. With a cap, the burst queues for a few hundred milliseconds instead.
+ *
+ * Keep it comfortably BELOW the pooler's pool_size, never at it: at the limit, the
+ * first `prisma db push` or script you run while the server is busy is the one refused.
+ */
+const DEFAULT_POOL_MAX = 10
+
+export function poolSizeFor(databaseUrl: string): number {
+  const raw = new URL(databaseUrl).searchParams.get('connection_limit')
+  const parsed = raw ? Number.parseInt(raw, 10) : NaN
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_POOL_MAX
 }

@@ -282,6 +282,24 @@ export const ENV = {
     // second factor at all.
     ECHO_STEP_UP_OTP: 'FRAUD_ECHO_STEP_UP_OTP',
   },
+  // M7 — Partner Console (verification-as-a-service). All optional; the defaults
+  // in partner.config.ts are safe for development.
+  PARTNER: {
+    // Price of one billable (successful) verification, in MINOR units of
+    // BILLING_CURRENCY. Integer, never a float — see M4's money rules.
+    PRICE_PER_VERIFICATION_MINOR: 'PARTNER_PRICE_PER_VERIFICATION_MINOR',
+    BILLING_CURRENCY: 'PARTNER_BILLING_CURRENCY',
+    // Outbound webhook delivery.
+    WEBHOOK_TIMEOUT_MS: 'PARTNER_WEBHOOK_TIMEOUT_MS',
+    WEBHOOK_MAX_ATTEMPTS: 'PARTNER_WEBHOOK_MAX_ATTEMPTS',
+    // DEV-ONLY: allow webhook delivery to loopback / private-network hosts.
+    // Refused when NODE_ENV=production — that is exactly the SSRF it guards.
+    ALLOW_PRIVATE_WEBHOOKS: 'PARTNER_ALLOW_PRIVATE_WEBHOOKS',
+    // Abuse ceilings: distinct partners that may open requests against one
+    // holder per hour, and requests one partner may open against one holder.
+    HOLDER_FANOUT_PER_HOUR: 'PARTNER_HOLDER_FANOUT_PER_HOUR',
+    PER_HOLDER_REQUESTS_PER_HOUR: 'PARTNER_PER_HOLDER_REQUESTS_PER_HOUR',
+  },
   // Singpass Myinfo v4 (Singapore KYC rail — production/UAT). Only wired when
   // RealSingpassProvider replaces the persona provider. See
   // src/config/singpass.config.ts for non-secret literals (endpoints/scopes).

@@ -87,11 +87,14 @@ export function Press({
       <Pressable
         disabled={disabled}
         onPress={handlePress}
+        // `.set()`, not `held.value =` — an assignment reads to the React Compiler as mutating
+        // a hook's return value, and it would skip memoizing this component entirely. That
+        // matters more here than anywhere: `Press` sits under almost every control in the app.
         onPressIn={() => {
-          held.value = withSpring(1, Motion.press);
+          held.set(withSpring(1, Motion.press));
         }}
         onPressOut={() => {
-          held.value = withSpring(0, Motion.press);
+          held.set(withSpring(0, Motion.press));
         }}
         android_ripple={
           ripple && !disabled

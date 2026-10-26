@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 
-import { CORRIDOR } from "@/lib/config/site";
+import { MARKET, STAGE } from "@/lib/config/site";
 import { ROUTES } from "@/lib/constants/routes";
 import { Guilloche, GuillocheBand } from "@/ui/engraving/Guilloche";
 import { Microtext } from "@/ui/engraving/Microtext";
@@ -13,7 +13,7 @@ import { Legend } from "@/ui/primitives/Legend";
  *
  * Not a hero. The composition is the object — issuing legend at the top edge,
  * the denomination promise across the left, the guilloche rosette holding the
- * corridor's latent panel at the right, and the data-field grid along the base
+ * latent panel at the right, and the data-field grid along the base
  * where a note prints its series and serial.
  */
 export function Face(): ReactElement {
@@ -32,30 +32,28 @@ export function Face(): ReactElement {
       <div className="relative mx-auto w-full max-w-6xl px-5 pb-14 pt-10 sm:px-8 sm:pb-20 sm:pt-14 lg:px-12">
         {/* Issuing legend + hairline: the line a note runs along its top. The
             long legend wraps within its own column rather than pushing the
-            corridor mark onto a second row. */}
+            market mark onto a second row. */}
         <div className="flex items-start justify-between gap-x-8 border-b border-reverse/20 pb-4">
           <Legend className="min-w-0 text-reverse-dim">
-            Reputation passport · issued to the holder
+            Reputation receipt · issued to the holder
           </Legend>
           <Legend className="shrink-0 text-latent">
-            {CORRIDOR.from.code} ⟷ {CORRIDOR.to.code}
+            Built for {MARKET.name}
           </Legend>
         </div>
 
         <div className="grid gap-12 pt-14 sm:pt-20 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)] lg:gap-16">
           <div>
             <h1 className="denomination text-[2.875rem] text-reverse sm:text-[4.25rem] lg:text-[5.25rem]">
-              Your financial reputation
-              <span className="block text-latent">crosses the border</span>
-              with you.
+              Prove yourself once.
+              <span className="block text-latent">Keep the proof.</span>
             </h1>
 
             <p className="mt-9 max-w-xl text-base leading-relaxed text-reverse-dim sm:text-lg">
-              You spent years paying on time. You land somewhere new and the
-              financial system there has never heard of you — no loan, a
-              rejected tenancy, insurance priced for a stranger. MyPravaah turns
-              the history you already built into a credential you hold and can
-              present anywhere.
+              Asked for documents you do not have, then refused with no reason?
+              MyPravaah reads the history you already have, with your consent,
+              and turns it into an answer with its reasons — and a receipt you
+              own and can show the next lender.
             </p>
 
             <div className="mt-11 flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -71,10 +69,9 @@ export function Face(): ReactElement {
                 audience is deciding whether to trust a stranger with financial
                 data; discovering the licensing position three pages in would be
                 the thing that loses them, and putting it here costs nothing we
-                are entitled to keep. */}
+                are entitled to keep. Read from STAGE, never restated. */}
             <p className="legend mt-6 max-w-md text-reverse-dim">
-              All eight modules built · not yet licensed · not yet on the App
-              Store or Google Play
+              {STAGE.short}
             </p>
           </div>
 
@@ -96,17 +93,17 @@ export function Face(): ReactElement {
                 <Legend className="text-latent">Latent value</Legend>
 
                 <p className="latent-panel denomination mt-5 text-5xl text-reverse sm:text-6xl">
-                  Seven years
+                  Eleven months
                 </p>
                 <p className="mt-4 text-sm leading-relaxed text-reverse-dim">
-                  of on-time payments, steady income and clean obligations —
-                  the thing that stops counting the moment you change country,
-                  and the thing this credential carries across.
+                  of daily settlements, suppliers paid and steady inflows —
+                  the record a credit bureau cannot see, and the thing this
+                  receipt carries to the lender.
                 </p>
 
                 <div className="mt-8 border-t border-reverse/15 pt-7">
                   <DataFieldGrid className="grid-cols-2">
-                    <DataField label="Corridor" value="IND ⟷ SGP" />
+                    <DataField label="Market" value={MARKET.name} />
                     <DataField label="Held by" value="The holder" />
                     <DataField label="Consent" value="Revocable" />
                     <DataField label="Basis" value="AA framework" />
@@ -119,7 +116,7 @@ export function Face(): ReactElement {
       </div>
 
       <Microtext
-        text="THIS CREDENTIAL IS ISSUED TO THE HOLDER AND MAY BE REVOKED BY THE HOLDER AT ANY TIME"
+        text="THIS RECEIPT IS ISSUED TO THE HOLDER AND MAY BE REVOKED BY THE HOLDER AT ANY TIME"
         repeat={16}
         className="px-5 pb-1 text-latent-line/55 sm:px-8 lg:px-12"
       />

@@ -302,11 +302,20 @@ export class InsuranceLifecycleService {
              * linked. The safe action is to RELEASE the reserve — the money goes back to
              * the wallet — rather than to earn a premium against a period nobody can
              * name.
+             *
+             * Unless it was never reserved. A VALIDATED orphan has moved no money, so
+             * there is no reserve to release — and `releasePremiumReserve` correctly
+             * declines to do anything with it. Left there, the row was re-selected by
+             * this sweep every five minutes forever (and by M4's saga sweep every
+             * minute, until that stopped picking up M5's rows). It is closed as FAILED.
              */
-            await this.money.releasePremiumReserve(
-              transaction.id,
-              'Orphaned premium transaction — no premium period to attribute it to',
-            )
+            const reason =
+              'Orphaned premium transaction — no premium period to attribute it to'
+            if (transaction.status === TxnStatus.VALIDATED) {
+              await this.money.failUnreservedPremium(transaction.id, reason)
+            } else {
+              await this.money.releasePremiumReserve(transaction.id, reason)
+            }
             continue
           }
 

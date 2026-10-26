@@ -22,6 +22,7 @@ import { ConsentModule } from '@/modules/consent/consent.module'
 import { FraudModule } from '@/modules/fraud/fraud.module'
 import { InsuranceModule } from '@/modules/insurance/insurance.module'
 import { KycModule } from '@/modules/kyc/kyc.module'
+import { PartnerModule } from '@/modules/partner/partner.module'
 import { PassportModule } from '@/modules/passport/passport.module'
 import { PaymentsModule } from '@/modules/payments/payments.module'
 import { ScoringModule } from '@/modules/scoring/scoring.module'
@@ -61,6 +62,11 @@ import { UsersModule } from '@/modules/users/users.module'
     FraudModule,
     PaymentsModule,
     InsuranceModule,
+    /**
+     * M7 last: it consumes M3 (the handshake it builds on) and M6 (the abuse gate),
+     * and nothing depends on it.
+     */
+    PartnerModule,
   ],
   controllers: [AppController],
   providers: [

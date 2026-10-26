@@ -66,6 +66,14 @@ export const ROUTES = {
     CARD: '/(app)/passport/card' as Href,
     HISTORY: '/(app)/passport/history' as Href,
     /**
+     * M7 — every share with a registered ORGANISATION, as a consent receipt the holder can
+     * withdraw. Distinct from HISTORY, which logs every presentation (people too, and
+     * failed attempts): a receipt is the durable consent artefact, a history row is an event.
+     */
+    SHARES: '/(app)/passport/shares' as Href,
+    SHARE: (receiptId: string) =>
+      ({ pathname: '/(app)/passport/shares/[receiptId]', params: { receiptId } }) as Href,
+    /**
      * The SCANNER's side of a peer check — where you wait for the person whose code you
      * just scanned, and where their details appear once they approve.
      *

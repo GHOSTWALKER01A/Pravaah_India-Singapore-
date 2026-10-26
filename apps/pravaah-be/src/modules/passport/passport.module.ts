@@ -19,6 +19,7 @@ import { PeerVerifyService } from '@/modules/passport/services/peer-verify.servi
 import { PresentationService } from '@/modules/passport/services/presentation.service'
 import { RevocationService } from '@/modules/passport/services/revocation.service'
 import { VerificationService } from '@/modules/passport/services/verification.service'
+import { VerifierEventsRegistry } from '@/modules/passport/services/verifier-events.registry'
 import { VerifierSessionService } from '@/modules/passport/services/verifier-session.service'
 
 /**
@@ -96,6 +97,8 @@ import { VerifierSessionService } from '@/modules/passport/services/verifier-ses
     PresentationService,
     VerificationService,
     VerifierSessionService,
+    // The seam M7 hooks the handshake through — see VerifierEventsRegistry.
+    VerifierEventsRegistry,
     /**
      * Person-to-person verification.
      *
@@ -117,9 +120,17 @@ import { VerifierSessionService } from '@/modules/passport/services/verifier-ses
     PartnerApiKeyGuard,
     JwtStrategy,
   ],
-  // M7's partner console verifies through VerificationService, and M4/M5 read a
-  // credential's status before disbursing — both go through these services rather than
-  // the Credential table, so the verification rules stay in one place.
-  exports: [VerificationService, KeyManagementService, RevocationService],
+  // M7's partner console verifies through VerificationService and drives the
+  // handshake through VerifierSessionService (observing it via VerifierEventsRegistry);
+  // M4/M5 read a credential's status before disbursing. All of them go through these
+  // services rather than the tables, so the verification rules stay in one place.
+  exports: [
+    VerificationService,
+    KeyManagementService,
+    RevocationService,
+    VerifierSessionService,
+    VerifierEventsRegistry,
+    PassportConfig,
+  ],
 })
 export class PassportModule {}

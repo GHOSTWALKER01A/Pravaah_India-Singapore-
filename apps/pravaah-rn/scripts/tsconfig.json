@@ -1,0 +1,13 @@
+{
+  // The verify-* scripts run under Node (via tsx), not React Native. TypeScript 6 stopped
+  // auto-including every @types package, so Node's globals (Buffer, __dirname, node:fs) must
+  // be opted into here — and ONLY here. Adding "node" to the app's own tsconfig would type
+  // Buffer and process as available inside the RN bundle, where they do not exist.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": ["./**/*.ts"],
+  // Reset: the parent's exclude list names this very directory.
+  "exclude": []
+}

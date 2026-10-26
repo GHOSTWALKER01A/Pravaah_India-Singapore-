@@ -17,6 +17,8 @@ import {
 import { ROUTES } from '@/constants/routes.constants';
 import { Radius, Space, usePalette } from '@/theme';
 
+import { useActiveShareCount } from '@/features/shares/use-active-share-count';
+
 import { CredentialNote } from './components/credential-note';
 import { usePassport } from './use-passport';
 
@@ -53,6 +55,7 @@ export function WalletScreen({ tabBar = false }: { tabBar?: boolean }) {
   } = usePassport({ pollMs: 10_000 });
   const [refreshing, setRefreshing] = useState(false);
   const [notes, setNotes] = useState<string[]>([]);
+  const activeShares = useActiveShareCount();
   const p = usePalette();
 
   useFocusEffect(
@@ -231,6 +234,20 @@ export function WalletScreen({ tabBar = false }: { tabBar?: boolean }) {
               }
               onPress={() => router.push(ROUTES.PASSPORT.HISTORY)}
             />
+            {/* M7: the standing permissions, as opposed to the event log above. Its count is
+                "who holds my data right now" — the number worth putting on the wallet. */}
+            <LinkRow
+              icon="receipt"
+              title="Shared with organisations"
+              detail={
+                activeShares === null
+                  ? 'Consent receipts — withdraw a share at any time'
+                  : activeShares === 0
+                    ? 'No organisation holds your data'
+                    : `${activeShares} ${activeShares === 1 ? 'organisation holds' : 'organisations hold'} your data · withdraw any time`
+              }
+              onPress={() => router.push(ROUTES.PASSPORT.SHARES)}
+            />
           </View>
         )}
 
@@ -280,7 +297,7 @@ function LinkRow({
   detail,
   onPress,
 }: {
-  icon: 'consent' | 'card' | 'history';
+  icon: 'consent' | 'card' | 'history' | 'receipt';
   title: string;
   detail: string;
   onPress: () => void;

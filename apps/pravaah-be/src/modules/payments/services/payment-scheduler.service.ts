@@ -4,6 +4,7 @@ import { Cron, CronExpression } from '@nestjs/schedule'
 import { APP_LOGGER, type AppLogger } from '@pravaah/nestjs-logger'
 
 import { RAIL_EVENT_RETENTION_MS } from '@/modules/payments/payments.config'
+import { EXTERNALLY_DRIVEN_TYPES } from '@/modules/payments/payments.state'
 import { CollectService } from '@/modules/payments/services/collect.service'
 import { FxService } from '@/modules/payments/services/fx.service'
 import { IdempotencyService } from '@/modules/payments/services/idempotency.service'
@@ -92,6 +93,10 @@ export class PaymentSchedulerService {
       const stuck = await this.prisma.transaction.findMany({
         where: {
           status: { in: [TxnStatus.VALIDATED, TxnStatus.RESERVED] },
+          // Only M4's own sagas. Premiums and claim payouts are M5's, resumed by
+          // InsuranceLifecycleService — see EXTERNALLY_DRIVEN_TYPES for what goes wrong
+          // when this sweep picks them up instead.
+          type: { notIn: [...EXTERNALLY_DRIVEN_TYPES] },
           // A grace period, so a transfer being driven RIGHT NOW by its own request is not
           // picked up and driven a second time concurrently.
           updatedAt: { lt: new Date(Date.now() - 120_000) },

@@ -73,8 +73,7 @@ export default function PrivacyPage(): ReactElement {
 
       <h3>Identity data</h3>
       <p>
-        To verify you, we collect and process the following, depending on your
-        corridor:
+        To verify you, we collect and process the following:
       </p>
       <ul>
         <li>
@@ -90,10 +89,6 @@ export default function PrivacyPage(): ReactElement {
           <strong>Bank account details</strong> — account number and IFSC, plus
           the account holder name your bank returns in response to a ₹1
           penny-drop.
-        </li>
-        <li>
-          <strong>Singpass Myinfo</strong> — the fields you choose to release
-          when you authorise the connection.
         </li>
         <li>
           <strong>A liveness capture and a face comparison result</strong> — a
@@ -121,6 +116,18 @@ export default function PrivacyPage(): ReactElement {
         you approve anything.
       </p>
 
+      <h3>Payment-app transaction signals</h3>
+      <p>
+        The signal layer being built joins UPI and merchant cash-flow &mdash;
+        inflows, outflows, how many people you transact with, how steady it is
+        &mdash; to the features your score is computed from. It will use that
+        data only with your consent and only for the purpose you approved.{" "}
+        <strong>
+          Today it runs on synthetic data, and no real transaction data of yours
+          is used.
+        </strong>
+      </p>
+
       <h3>Your score, and the reasons behind it</h3>
       <p>
         Your financial data is normalised into features &mdash; income
@@ -142,22 +149,22 @@ export default function PrivacyPage(): ReactElement {
         they say. Declining changes nothing about your score or your eligibility.
       </p>
 
-      <h3>Your credential, and who you showed it to</h3>
+      <h3>Your reputation receipt, and who you showed it to</h3>
       <p>
-        When your passport is issued, a signing key is generated on your own
+        When your receipt is issued, a signing key is generated on your own
         device and never leaves it; we receive only its public half. We retain the
-        credential record, its validity window, its revocation status, and a log
-        of every presentation &mdash; who checked it, when, whether the check
-        passed, and which claims you disclosed. That log exists for you: it is the
-        only way to know afterwards what left your wallet.
+        receipt record, its validity window, its revocation status, and a log of
+        every presentation &mdash; which partner checked it, when, whether the
+        check passed, which claims you disclosed, and the decision the partner
+        recorded. That log exists for you: it is the only way to know afterwards
+        what left your wallet and what was done with it.
       </p>
 
       <h3>Payments</h3>
       <p>
-        If you send money we hold the transaction, the amount, the currency, the
-        purpose you selected, the beneficiary details you entered, the exchange
-        rate you were quoted, and the ledger entries recording what happened to
-        your balance. Financial regulation requires payment records to be
+        If you send money we hold the transaction, the amount, the fee you were
+        quoted, the payee details you entered, and the ledger entries recording
+        what happened to your balance. Financial regulation requires payment records to be
         retained, so these are not deleted on request &mdash; a ledger you can
         erase is not a ledger, and it is also the document that answers you when a
         balance is disputed.
@@ -261,7 +268,7 @@ export default function PrivacyPage(): ReactElement {
         general terms.
       </p>
       <p>
-        Revoking your <strong>passport</strong> is separate from revoking a
+        Revoking your <strong>receipt</strong> is separate from revoking a
         consent, and stronger in one respect: it stops verifying for everyone,
         everywhere, immediately &mdash; including for anyone already holding a
         copy of it. The device key it was bound to is destroyed at the same time.
@@ -279,15 +286,15 @@ export default function PrivacyPage(): ReactElement {
           encrypted data. They cannot read it.
         </li>
         <li>
-          <strong>Institutions you choose to present a credential to.</strong>{" "}
+          <strong>Lenders and insurers you choose to show a receipt to.</strong>{" "}
           They receive only the claims you ticked — not the underlying financial
           data behind them, and not the claims you withheld. What you withhold is
           reported to them as withheld rather than as a negative answer.
         </li>
         <li>
           <strong>Payment rails and their operators</strong>, when you send money.
-          They receive what a transfer requires: the amount, the beneficiary
-          details, and the purpose code the corridor demands.
+          They receive what a UPI transfer requires: the amount and the payment
+          addresses involved.
         </li>
         <li>
           <strong>An insurance risk carrier</strong>, if and when one is on paper,
@@ -316,11 +323,11 @@ export default function PrivacyPage(): ReactElement {
         <li>See what consents are active and exactly what each one covers.</li>
         <li>Revoke any consent, which deletes the data collected under it.</li>
         <li>
-          See every disclosure of your credential — who checked it, when, and
-          which claims they received.
+          See every disclosure of your receipt — who checked it, when, which
+          claims they received, and what they decided.
         </li>
         <li>
-          Revoke the credential itself, which stops it verifying for everyone at
+          Revoke the receipt itself, which stops it verifying for everyone at
           once.
         </li>
         <li>
@@ -343,13 +350,17 @@ export default function PrivacyPage(): ReactElement {
         </li>
       </ul>
 
-      <h2>Cross-border transfer</h2>
+      <h2>Where your data is processed</h2>
       <p>
-        MyPravaah operates across the India&ndash;Singapore corridor, so data may
-        be processed in either jurisdiction. Where data crosses a border, it does
-        so under the protections required by the law of the jurisdiction it came
-        from.
+        MyPravaah serves people in India. Raw financial records are encrypted
+        field by field (AES-256-GCM) before they are stored, on top of the
+        encryption that carries them from your bank.
       </p>
+      <ReplaceBeforeLaunch>
+        The hosting region and any sub-processor that stores personal data
+        outside India have not been fixed. Both must be named here before
+        launch.
+      </ReplaceBeforeLaunch>
 
       <h2>Automated decisions</h2>
       <p>
@@ -371,6 +382,21 @@ export default function PrivacyPage(): ReactElement {
           say anything useful, you are told that instead of being given a number.
           The model version that produced any given score is recorded, so a score
           can always be traced to the thing that made it.
+        </li>
+        <li>
+          <strong>
+            A lender&rsquo;s decision is the lender&rsquo;s.
+          </strong>{" "}
+          We do not lend and we do not underwrite. A partner that receives your
+          receipt decides under its own rules, and the decision it records is
+          shown to you.
+        </li>
+        <li>
+          <strong>The copilot, when it ships, will decide nothing.</strong> A
+          language model will run the conversation and explain results, but it
+          will not decide an approval, a limit or a price, and it will not give
+          a reason the scoring model did not produce. Every tool it calls will be
+          recorded in the audit log.
         </li>
         <li>
           <strong>Insurance pricing is automated.</strong> A higher rate arrives

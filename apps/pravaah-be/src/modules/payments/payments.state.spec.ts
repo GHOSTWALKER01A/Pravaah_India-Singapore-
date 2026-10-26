@@ -9,6 +9,7 @@ import {
   hasFundsInSuspense,
   hasStatusCheckBudget,
   isCollectOpen,
+  isDrivenByTransferSaga,
   isHandleSupported,
   isInFlight,
   isMandateDebitable,
@@ -31,6 +32,7 @@ import {
   MandateStatus,
   PaymentRail,
   TxnStatus,
+  TxnType,
 } from 'generated/prisma/client'
 
 describe('payments.state — transaction saga', () => {
@@ -104,6 +106,29 @@ describe('payments.state — transaction saga', () => {
   it('rejects an unknown transition rather than defaulting to allowed', () => {
     expect(canTransition(TxnStatus.RISK_HELD, TxnStatus.SUCCESS)).toBe(false)
     expect(canTransition(TxnStatus.EXPIRED, TxnStatus.SUCCESS)).toBe(false)
+  })
+})
+
+describe('payments.state — saga ownership', () => {
+  it('keeps M5 money out of the transfer saga', () => {
+    // Driving these through M4 applies a UPI cap to an internal move and asks a rail
+    // about a payment no rail ever saw. M5 owns their saga and their resume sweep.
+    expect(isDrivenByTransferSaga(TxnType.PREMIUM)).toBe(false)
+    expect(isDrivenByTransferSaga(TxnType.CLAIM_PAYOUT)).toBe(false)
+  })
+
+  it('still drives every M4-owned type', () => {
+    for (const type of [
+      TxnType.P2P,
+      TxnType.P2M,
+      TxnType.REMITTANCE,
+      TxnType.DISBURSAL,
+      TxnType.REPAYMENT,
+      TxnType.TOPUP,
+      TxnType.WITHDRAWAL,
+    ]) {
+      expect(isDrivenByTransferSaga(type)).toBe(true)
+    }
   })
 })
 

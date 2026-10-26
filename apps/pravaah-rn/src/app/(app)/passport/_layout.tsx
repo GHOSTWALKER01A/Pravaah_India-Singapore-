@@ -60,6 +60,12 @@ export default function PassportLayout() {
           headerBackVisible: false,
         }}
       />
+
+      {/* Titled here rather than left to the router, which would otherwise print the raw
+          route name — `shares/index` — in the header of the screen built for trust. */}
+      <Stack.Screen name="history" options={{ title: 'Who has seen it' }} />
+      <Stack.Screen name="shares/index" options={{ title: 'Shared with organisations' }} />
+      <Stack.Screen name="shares/[receiptId]" options={{ title: 'Consent receipt' }} />
     </Stack>
   );
 }

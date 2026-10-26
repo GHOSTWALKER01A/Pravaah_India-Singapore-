@@ -39,9 +39,9 @@ export function howToApplyJsonLd(
   return {
     "@context": "https://schema.org",
     "@type": "HowTo",
-    name: "How to apply for a MyPravaah reputation passport",
+    name: "How to get verified for a MyPravaah reputation receipt",
     description:
-      "The identity checks required to be verified on the India–Singapore corridor, in the order the product enforces them.",
+      "The six identity checks required to be verified in India, in the order the product enforces them.",
     url: `${BASE_URL}${ROUTES.HOW_TO_APPLY}`,
     step: steps.map((step, index) => ({
       "@type": "HowToStep",

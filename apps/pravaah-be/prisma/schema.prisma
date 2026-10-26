@@ -203,6 +203,91 @@ enum VerifierRequestStatus {
   DECLINED
   EXPIRED
   CONSUMED
+  /**
+   * M7: withdrawn by the verifier before the holder answered — or swept when the
+   * partner was suspended/revoked. Distinct from EXPIRED because the holder's inbox
+   * should say "the lender cancelled this", not "you ran out of time".
+   */
+  CANCELLED
+}
+
+// ── M7: Partner Console (the relying-party side) ──
+enum PartnerType {
+  LENDER
+  INSURER
+  EMPLOYER
+  LANDLORD
+  BANK
+  OTHER
+}
+
+/**
+ *   PENDING_APPROVAL → ACTIVE | REVOKED (rejected application)
+ *   ACTIVE           → SUSPENDED | REVOKED
+ *   SUSPENDED        → ACTIVE | REVOKED
+ *   REVOKED          → (terminal)
+ *
+ * `VerifierPartner.isActive` is kept equal to `status == ACTIVE` by every write path,
+ * so M3's code that predates this enum keeps reading one truthful boolean.
+ */
+enum PartnerStatus {
+  PENDING_APPROVAL
+  ACTIVE
+  SUSPENDED
+  REVOKED
+}
+
+enum PartnerTrustLevel {
+  STANDARD
+  HIGH
+}
+
+/** Declaration order is seniority, low → high, so `orderBy` sorts a team sensibly. */
+enum PartnerRole {
+  PARTNER_VIEWER
+  PARTNER_ANALYST
+  PARTNER_ADMIN
+}
+
+enum PartnerApiKeyStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum PartnerDecisionType {
+  APPROVED
+  DECLINED
+  /** Sent to the partner's own manual underwriting. Not final. */
+  REFERRED
+}
+
+enum ConsentReceiptStatus {
+  ACTIVE
+  WITHDRAWN
+  /** Retention elapsed; the cached disclosure has been purged. */
+  EXPIRED
+}
+
+/**
+ * One metered event. `billable` is decided per kind by `partner.state.ts`, never by
+ * the caller, so the invoice cannot drift from the definition of a billable event.
+ */
+enum PartnerUsageKind {
+  REQUEST_CREATED
+  VERIFIED
+  PRESENTATION_REJECTED
+  DECLINED
+  EXPIRED
+  CANCELLED
+  DIRECT_VERIFIED
+  DIRECT_REJECTED
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  DELIVERED
+  /** Gave up after the retry budget. Redeliverable from the console. */
+  DEAD
 }
 
 // ── M4: Cross-Border Money Movement (UPI ↔ PayNow · ledger · idempotency) ──
@@ -658,6 +743,8 @@ enum RiskSubjectType {
   DEVICE_BIND
   CONSENT
   PAYOUT
+  /** M7: a holder approving a share to a partner. */
+  VERIFICATION
 }
 
 /**
@@ -828,6 +915,9 @@ model User {
   // holder's inbox and the scanner's outbox must never be one query.
   scansRequested   VerifierRequest[] @relation("PeerScanRequester")
   passportCard     PassportCard?
+
+  // ── M7: Partner Console — "who has seen my passport" ──
+  consentReceipts ConsentReceipt[]
 
   // ── M4: Cross-border money movement ──
   transactions    Transaction[]
@@ -1059,6 +1149,10 @@ model AdminUser {
   fraudCases     FraudCase[]
   fraudCaseNotes FraudCaseNote[]
   listEntries    ListEntry[]
+  // M7: approving a partner grants it the right to ask any holder for data, and
+  // setting its scopes decides WHICH data. Attributed by foreign key for the same
+  // reason as a claim payout: an unattributable grant is an insider's best move.
+  partnersApproved VerifierPartner[] @relation("PartnerApprovedBy")
 }
 
 // Replay protection for provider webhooks (unique per provider event id)
@@ -1503,18 +1597,66 @@ model VerifierPartner {
   // The identifier that MUST appear as the KB-JWT `aud`. Binding a presentation
   // to one audience is what stops a lender replaying it at a different lender.
   audience String @unique
-  // sha256 of the API key. The key itself is shown once, at registration.
-  apiKeyHash String @unique @map("api_key_hash")
+  // sha256 of the M3 bootstrap API key, shown once at admin registration.
+  //
+  // Nullable since M7: a partner that APPLIED through the console has no bootstrap
+  // key — its keys live in `PartnerApiKey`, scoped and rotatable. Postgres treats
+  // NULLs as distinct in a unique index, which is exactly right here: many keyless
+  // partners, never two sharing a hash.
+  apiKeyHash String? @unique @map("api_key_hash")
 
   contactEmail String? @map("contact_email")
   country      String? @db.VarChar(2)
+  // Kept equal to `status == ACTIVE` by every write path. See `PartnerStatus`.
   isActive     Boolean @default(true) @map("is_active")
 
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   lastUsedAt DateTime? @map("last_used_at") @db.Timestamptz()
 
-  requests      VerifierRequest[]
-  presentations Presentation[]
+  // ── M7: the relying-party profile ──────────────────────────────────────
+  type       PartnerType       @default(OTHER)
+  // ACTIVE by default so every partner registered through M3 before this column
+  // existed stays live. An applicant is created PENDING_APPROVAL explicitly.
+  status     PartnerStatus     @default(ACTIVE)
+  trustLevel PartnerTrustLevel @default(STANDARD) @map("trust_level")
+  // The domain shown on the holder's consent screen. The anti-phishing surface:
+  // a holder must be able to see WHO is asking before approving a share.
+  domain     String?
+
+  // The claims this partner may ever REQUEST, fixed by an admin at approval.
+  // Empty means nothing — enforcement fails closed, never open.
+  allowedScopes String[] @default([]) @map("allowed_scopes")
+  // How long the cached disclosure is kept before the purge job redacts it, and
+  // what the holder's consent receipt promises. Purpose limitation, in a column.
+  retentionDays Int      @default(90) @map("retention_days")
+  // What the applicant ASKED for, and why. Read by the admin who approves; grants
+  // nothing by itself — `allowedScopes` is the only field enforcement reads.
+  requestedScopes String[] @default([]) @map("requested_scopes")
+  useCase         String?  @map("use_case")
+
+  webhookUrl       String? @map("webhook_url")
+  // AES-256-GCM field-encrypted HMAC secret. Revealed to the partner once, on rotation.
+  webhookSecretEnc String? @map("webhook_secret_enc")
+
+  statusReason String?   @map("status_reason")
+  appliedAt    DateTime? @map("applied_at") @db.Timestamptz()
+  approvedAt   DateTime? @map("approved_at") @db.Timestamptz()
+  approvedById String?   @map("approved_by_id") @db.Uuid
+  updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  approvedBy AdminUser? @relation("PartnerApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  requests          VerifierRequest[]
+  presentations     Presentation[]
+  users             PartnerUser[]
+  apiKeys           PartnerApiKey[]
+  templates         PartnerTemplate[]
+  consentReceipts   ConsentReceipt[]
+  decisions         PartnerDecision[]
+  usageEvents       PartnerUsageEvent[]
+  webhookDeliveries PartnerWebhookDelivery[]
+
+  @@index([status])
 }
 
 // ── the verifier↔holder handshake behind a card tap or QR scan ─────────────
@@ -1561,16 +1703,40 @@ model VerifierRequest {
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   respondedAt DateTime? @map("responded_at") @db.Timestamptz()
   consumedAt  DateTime? @map("consumed_at") @db.Timestamptz()
+  cancelledAt DateTime? @map("cancelled_at") @db.Timestamptz()
 
-  partner      VerifierPartner? @relation(fields: [partnerId], references: [id], onDelete: SetNull)
-  user         User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  credential   Credential?      @relation(fields: [credentialId], references: [id], onDelete: Cascade)
-  presentation Presentation?    @relation(fields: [presentationId], references: [id], onDelete: SetNull)
+  // ── M7: partner-console context ──
+  // Written in the SAME insert as the request, so a request can never exist
+  // without the predicates it was opened for.
+  apiKeyId          String? @map("api_key_id") @db.Uuid
+  partnerTemplateId String? @map("partner_template_id") @db.Uuid
+  // The partner's own reference (their loan application id). Echoed in webhooks.
+  externalRef       String? @map("external_ref") @db.VarChar(128)
+  // Replays of the same create return the same request. Scoped to the partner.
+  idempotencyKey    String? @map("idempotency_key") @db.VarChar(128)
+  // Compiled predicates: [{ key, claim, op, value, requires: [threshold claims] }].
+  predicates        Json?   @db.Json
+  // The console user who opened it, when it was opened from the console.
+  createdByPartnerUserId String? @map("created_by_partner_user_id") @db.Uuid
 
+  partner         VerifierPartner? @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  user            User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  credential      Credential?      @relation(fields: [credentialId], references: [id], onDelete: Cascade)
+  presentation    Presentation?    @relation(fields: [presentationId], references: [id], onDelete: SetNull)
+  apiKey          PartnerApiKey?   @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+  partnerTemplate PartnerTemplate? @relation(fields: [partnerTemplateId], references: [id], onDelete: SetNull)
+  consentReceipt  ConsentReceipt?
+  decision        PartnerDecision?
+
+  // NULL keys are distinct in Postgres, so only requests that SENT a key collide.
+  @@unique([partnerId, idempotencyKey])
   @@index([status, expiresAt])
   @@index([userId, status])
   // The scanner's outbox: "what did I ask for, and did they answer yet".
   @@index([requestedByUserId, status])
+  // The partner console's list view.
+  @@index([partnerId, createdAt])
+  @@index([partnerId, externalRef])
 }
 
 // ── presentation log: transparency for the holder, audit for us ────────────
@@ -1633,6 +1799,234 @@ model PassportCard {
   credential Credential? @relation(fields: [credentialId], references: [id], onDelete: SetNull)
 
   @@index([status])
+}
+
+// ============================================================================
+// M7 — PARTNER CONSOLE (the relying-party side · closes the loop)
+// ============================================================================
+// M3 built the handshake: a registered verifier opens a request, the holder
+// approves on-device, the verifier collects a cryptographically verified result.
+// M7 does NOT build a second one. It extends M3's `VerifierPartner` and
+// `VerifierRequest` into a commercial product — partner lifecycle, scoped and
+// rotatable keys, predicates, consent receipts, underwriting decisions, signed
+// webhooks, metering and a trust registry — and hooks into the handshake through
+// `VerifierEventsRegistry`, so M3 never imports M7.
+
+// ── console users (a partner's own staff) ──────────────────────────────────
+// Pre-provisioned, never auto-created: they sign in with the ordinary OTP login
+// and `PartnerConsoleGuard` authorises them against this table, exactly as
+// `AdminAuthGuard` does against `AdminUser`.
+model PartnerUser {
+  id        String      @id @default(uuid()) @db.Uuid
+  partnerId String      @map("partner_id") @db.Uuid
+  email     String      @unique
+  phone     String?     @unique
+  name      String?
+  role      PartnerRole @default(PARTNER_VIEWER)
+  isActive  Boolean     @default(true) @map("is_active")
+
+  lastLoginAt DateTime? @map("last_login_at") @db.Timestamptz()
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  partner VerifierPartner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+
+  @@index([partnerId, isActive])
+}
+
+// ── API keys: many per partner, scoped, rotatable ──────────────────────────
+model PartnerApiKey {
+  id        String @id @default(uuid()) @db.Uuid
+  partnerId String @map("partner_id") @db.Uuid
+  label     String
+
+  // First characters of the key, shown in the console so a partner can tell keys
+  // apart. Never enough to authenticate with.
+  prefix  String @unique
+  // sha256 of the full key. The plaintext is shown exactly once, at issue.
+  keyHash String @unique @map("key_hash")
+
+  // Subset of `VerifierPartner.allowedScopes`. Re-checked against the partner's
+  // CURRENT scopes on every request, so narrowing a partner narrows every key.
+  scopes          String[]
+  status          PartnerApiKeyStatus @default(ACTIVE)
+  rateLimitPerMin Int                 @default(60) @map("rate_limit_per_min")
+  // Set on the OLD key during a rotation: both keys work until then, so a
+  // partner can deploy the new one without downtime.
+  expiresAt       DateTime?           @map("expires_at") @db.Timestamptz()
+
+  lastUsedAt             DateTime? @map("last_used_at") @db.Timestamptz()
+  createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  revokedAt              DateTime? @map("revoked_at") @db.Timestamptz()
+  revokedReason          String?   @map("revoked_reason")
+  rotatedFromId          String?   @unique @map("rotated_from_id") @db.Uuid
+  // Who minted it — exactly one of these is set.
+  createdByPartnerUserId String?   @map("created_by_partner_user_id") @db.Uuid
+  createdByAdminId       String?   @map("created_by_admin_id") @db.Uuid
+
+  partner     VerifierPartner   @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  rotatedFrom PartnerApiKey?    @relation("KeyRotation", fields: [rotatedFromId], references: [id], onDelete: SetNull)
+  rotatedTo   PartnerApiKey?    @relation("KeyRotation")
+  requests    VerifierRequest[]
+
+  @@index([partnerId, status])
+}
+
+// ── a partner's saved requests ─────────────────────────────────────────────
+model PartnerTemplate {
+  id         String   @id @default(uuid()) @db.Uuid
+  partnerId  String   @map("partner_id") @db.Uuid
+  name       String
+  purpose    String
+  claims     String[]
+  // Uncompiled predicate specs; compiled against the catalogue at use time.
+  predicates Json     @default("[]") @db.Json
+  isArchived Boolean  @default(false) @map("is_archived")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  partner  VerifierPartner   @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  requests VerifierRequest[]
+
+  @@unique([partnerId, name])
+}
+
+// ── the holder's durable record of a share (DPDP / PDPA consent artefact) ──
+model ConsentReceipt {
+  id                String  @id @default(uuid()) @db.Uuid
+  userId            String  @map("user_id") @db.Uuid
+  partnerId         String  @map("partner_id") @db.Uuid
+  verifierRequestId String  @unique @map("verifier_request_id") @db.Uuid
+  presentationId    String? @map("presentation_id") @db.Uuid
+
+  // Snapshotted, not joined: a receipt is a legal record of what the holder was
+  // SHOWN when they said yes, and must not change if the partner renames itself.
+  partnerName   String  @map("partner_name")
+  partnerDomain String? @map("partner_domain")
+  purpose       String
+
+  // Claim NAMES only — never values. A receipt that stored the disclosed score
+  // would recreate, forever, what selective disclosure keeps out of our hands.
+  claimsShared   String[] @map("claims_shared")
+  claimsWithheld String[] @map("claims_withheld")
+  // Predicate keys the disclosure answers, e.g. "score_band:GTE:GOOD".
+  predicateKeys  String[] @map("predicate_keys")
+
+  retentionDays  Int                  @map("retention_days")
+  status         ConsentReceiptStatus @default(ACTIVE)
+  issuedAt       DateTime             @default(now()) @map("issued_at") @db.Timestamptz()
+  withdrawnAt    DateTime?            @map("withdrawn_at") @db.Timestamptz()
+  withdrawReason String?              @map("withdraw_reason")
+  // issuedAt + retentionDays. The purge job redacts the cached disclosure then.
+  purgeAt        DateTime             @map("purge_at") @db.Timestamptz()
+  purgedAt       DateTime?            @map("purged_at") @db.Timestamptz()
+
+  user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  partner VerifierPartner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  request VerifierRequest @relation(fields: [verifierRequestId], references: [id], onDelete: Cascade)
+
+  @@index([userId, issuedAt])
+  @@index([partnerId, issuedAt])
+  // The purge job's scan: unpurged receipts past their date.
+  @@index([purgedAt, purgeAt])
+}
+
+// ── the partner's own underwriting outcome — closes the audit loop ─────────
+model PartnerDecision {
+  id                String              @id @default(uuid()) @db.Uuid
+  verifierRequestId String              @unique @map("verifier_request_id") @db.Uuid
+  partnerId         String              @map("partner_id") @db.Uuid
+  decision          PartnerDecisionType
+  reasonCode        String?             @map("reason_code") @db.VarChar(64)
+  reason            String?
+  metadata          Json?               @db.Json
+  // Bumped on every change, so "the lender approved, then declined" is visible
+  // rather than silently overwritten. The full history is in AuditLog.
+  revision          Int                 @default(1)
+
+  decidedByPartnerUserId String? @map("decided_by_partner_user_id") @db.Uuid
+  decidedByApiKeyId      String? @map("decided_by_api_key_id") @db.Uuid
+
+  decidedAt DateTime @default(now()) @map("decided_at") @db.Timestamptz()
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  request VerifierRequest @relation(fields: [verifierRequestId], references: [id], onDelete: Cascade)
+  partner VerifierPartner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+
+  @@index([partnerId, decidedAt])
+}
+
+// ── metering: one row per billable-or-not event, idempotent by construction ─
+// Counters (`count = count + 1`) cannot be made idempotent: a retried event
+// double-bills. An event LEDGER keyed by `dedupeKey` can — a replay is a unique
+// violation, skipped. The invoice is a `groupBy`, and every line is explainable.
+model PartnerUsageEvent {
+  id                String           @id @default(uuid()) @db.Uuid
+  partnerId         String           @map("partner_id") @db.Uuid
+  verifierRequestId String?          @map("verifier_request_id") @db.Uuid
+  apiKeyId          String?          @map("api_key_id") @db.Uuid
+  kind              PartnerUsageKind
+  billable          Boolean          @default(false)
+  // Billing period, `YYYY-MM` in UTC.
+  period            String           @db.VarChar(7)
+  unitPriceMinor    Int              @default(0) @map("unit_price_minor")
+  currency          String           @default("SGD") @db.VarChar(3)
+  // e.g. `<requestId>:VERIFIED`. A replay of the same fact collides here.
+  dedupeKey         String           @unique @map("dedupe_key")
+  occurredAt        DateTime         @default(now()) @map("occurred_at") @db.Timestamptz()
+
+  partner VerifierPartner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+
+  @@index([partnerId, period, kind])
+  @@index([verifierRequestId])
+}
+
+// ── outbound webhooks: a transactional outbox with retries ─────────────────
+model PartnerWebhookDelivery {
+  id        String @id @default(uuid()) @db.Uuid
+  partnerId String @map("partner_id") @db.Uuid
+  // Sent as `x-pravaah-event-id`; the partner dedupes on it.
+  eventId   String @unique @map("event_id") @db.Uuid
+  eventType String @map("event_type")
+  // One delivery per fact, however many times the fact is observed.
+  dedupeKey String @unique @map("dedupe_key")
+  payload   Json   @db.Json
+
+  status         WebhookDeliveryStatus @default(PENDING)
+  attempts       Int                   @default(0)
+  nextAttemptAt  DateTime              @default(now()) @map("next_attempt_at") @db.Timestamptz()
+  // Claimed by a dispatcher run. A lease, not a lock: it expires, so a crashed
+  // run cannot strand a delivery.
+  leaseUntil     DateTime?             @map("lease_until") @db.Timestamptz()
+  lastAttemptAt  DateTime?             @map("last_attempt_at") @db.Timestamptz()
+  lastStatusCode Int?                  @map("last_status_code")
+  lastError      String?               @map("last_error")
+  deliveredAt    DateTime?             @map("delivered_at") @db.Timestamptz()
+  createdAt      DateTime              @default(now()) @map("created_at") @db.Timestamptz()
+
+  partner VerifierPartner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
+  @@index([partnerId, createdAt])
+}
+
+// ── which issuers the platform accepts presentations from ──────────────────
+// PRAVAAH's own did:web is registered automatically on boot (`isSelf`). Setting
+// `accepted = false` is a kill switch: every verification naming that issuer
+// fails closed immediately, without touching a single credential.
+model TrustRegistryEntry {
+  id         String   @id @default(uuid()) @db.Uuid
+  issuerDid  String   @unique @map("issuer_did")
+  issuerName String   @map("issuer_name")
+  country    String   @db.VarChar(2)
+  jwksUri    String?  @map("jwks_uri")
+  accepted   Boolean  @default(true)
+  isSelf     Boolean  @default(false) @map("is_self")
+  note       String?
+  addedById  String?  @map("added_by_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
 }
 
 // ============================================================================

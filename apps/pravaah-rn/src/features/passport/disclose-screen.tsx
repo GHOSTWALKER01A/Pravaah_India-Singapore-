@@ -1,9 +1,9 @@
 import { router } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { ApiError, passportService } from '@/api';
-import type { ClaimDescriptor, VerifierRequestDetail } from '@/api';
+import { ApiError, passportService, sharesService } from '@/api';
+import type { ClaimDescriptor, ShareReceipt, VerifierRequestDetail } from '@/api';
 import {
   Button,
   Checkbox,
@@ -18,9 +18,27 @@ import {
   Text,
   haptic,
 } from '@/components/ui';
+import { ROUTES } from '@/constants/routes.constants';
 import { Radius, Space, usePalette } from '@/theme';
 
+import { Counterparty } from '@/features/shares/components/counterparty';
+import { DisclosureList } from '@/features/shares/components/disclosure-list';
+import { formatDate, isYesNoClaim } from '@/features/shares/share-meta';
+
 import { signKeyBinding } from './holder-key';
+
+/**
+ * Why a share did not go through, in the terms the holder needs.
+ *
+ * `stopped` and `unavailable` are M7/M6 outcomes and are told apart from a generic error
+ * on purpose: "a security check stopped this" and "a security check could not run" call
+ * for opposite reactions (stop vs. try again), and both must say plainly that NOTHING
+ * was shared — the one fact a person in front of a lender most needs to know.
+ */
+type ShareFailure =
+  | { kind: 'stopped'; message: string; reasons: string[] }
+  | { kind: 'unavailable'; message: string }
+  | { kind: 'error'; message: string };
 
 /**
  * Consent to disclose — the screen the whole module exists to make possible.
@@ -37,6 +55,10 @@ import { signKeyBinding } from './holder-key';
  *  3. DECLINING IS A FIRST-CLASS ACTION. It sits beside Share, not buried, and sharing
  *     nothing at all is permitted — an empty presentation still proves Pravaah issued a
  *     live passport to the holder of this device.
+ *
+ * M7 adds the organisation's VERIFIED identity (domain, type, retention promise) before any
+ * checkbox, marks yes/no answers as what they are, and ends a share with the consent
+ * receipt the holder can later withdraw.
  */
 export function DiscloseScreen({ requestId }: { requestId: string }) {
   const p = usePalette();
@@ -46,34 +68,37 @@ export function DiscloseScreen({ requestId }: { requestId: string }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState<'share' | 'decline' | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState<{ shared: string[]; withheld: string[] } | null>(null);
+  const [failure, setFailure] = useState<ShareFailure | null>(null);
+  const [done, setDone] = useState<{
+    shared: string[];
+    withheld: string[];
+    receipt: ShareReceipt | null;
+  } | null>(null);
+
+  const load = useCallback(async (): Promise<VerifierRequestDetail | null> => {
+    try {
+      const detail = await passportService.request(requestId);
+      setRequest(detail);
+      return detail;
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not load this request.');
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, [requestId]);
 
   useEffect(() => {
-    let alive = true;
-    void (async () => {
-      try {
-        const detail = await passportService.request(requestId);
-        if (alive) setRequest(detail);
-      } catch (caught) {
-        if (alive) {
-          setError(
-            caught instanceof ApiError
-              ? caught.message
-              : 'Could not load this request.',
-          );
-        }
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [requestId]);
+    void load();
+  }, [load]);
 
   const claims = request?.claims ?? [];
   const held = claims.filter((claim) => claim.held);
   const notHeld = claims.filter((claim) => !claim.held);
+  const profile = request?.verifierProfile ?? null;
+  // A registered organisation is asking (as opposed to a person scanning a code). Only
+  // these shares produce a consent receipt.
+  const institution = !!request && !request.requester;
 
   const toggle = (claim: string) => {
     haptic.select();
@@ -83,6 +108,30 @@ export function DiscloseScreen({ requestId }: { requestId: string }) {
       else next.add(claim);
       return next;
     });
+  };
+
+  /**
+   * The receipt for a share that just happened.
+   *
+   * The server issues it inside the approval, so it normally exists immediately; one short
+   * retry covers the case where issuance fell to the backend's reconciliation sweep. A
+   * missing receipt never blocks the "shared" screen — it only changes one line on it.
+   */
+  const fetchReceipt = async (): Promise<ShareReceipt | null> => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await sharesService.byRequest(requestId);
+      } catch (caught) {
+        if (!(caught instanceof ApiError) || caught.status !== 404) return null;
+        await new Promise((resolve) => setTimeout(resolve, 800));
+      }
+    }
+    return null;
+  };
+
+  const finish = async (shared: string[], withheld: string[]) => {
+    haptic.commit();
+    setDone({ shared, withheld, receipt: institution ? await fetchReceipt() : null });
   };
 
   /**
@@ -97,9 +146,9 @@ export function DiscloseScreen({ requestId }: { requestId: string }) {
     if (!request?.credentialId) return;
     setBusy('share');
     setError(null);
+    setFailure(null);
+    const revealClaims = [...selected];
     try {
-      const revealClaims = [...selected];
-
       const material = await passportService.signingMaterial({
         credentialId: request.credentialId,
         audience: request.audience,
@@ -119,21 +168,69 @@ export function DiscloseScreen({ requestId }: { requestId: string }) {
         kbJwt,
       });
 
-      haptic.commit();
-      setDone({ shared: result.disclosedClaims, withheld: result.withheldClaims });
+      await finish(result.disclosedClaims, result.withheldClaims);
     } catch (caught) {
       haptic.refused();
-      setError(
-        caught instanceof ApiError ? caught.message : 'Could not share your passport.',
-      );
+      await handleShareFailure(caught, revealClaims);
     } finally {
       setBusy(null);
     }
   };
 
+  const handleShareFailure = async (caught: unknown, revealClaims: string[]) => {
+    if (!(caught instanceof ApiError)) {
+      setFailure({ kind: 'error', message: 'Could not share your passport. Nothing was shared.' });
+      return;
+    }
+
+    // Refused by a check in front of the share (M7's partner gate, M6's risk engine).
+    if (caught.status === 403) {
+      setFailure({ kind: 'stopped', message: caught.message, reasons: caught.reasons });
+      return;
+    }
+    if (caught.status === 503) {
+      setFailure({ kind: 'unavailable', message: caught.message });
+      return;
+    }
+
+    /**
+     * The request closed (410), or the answer never came back (network drop / 5xx).
+     *
+     * For the second case the share MAY have gone through — the phone just never heard.
+     * Re-reading the request is the only honest way to know, and it turns "an error
+     * occurred" into either the receipt the holder earned or a clear "nothing was sent".
+     */
+    const uncertain = caught.status === 0 || (caught.status ?? 0) >= 500;
+    if (caught.status === 410 || uncertain) {
+      const fresh = await load();
+      if (fresh && (fresh.status === 'APPROVED' || fresh.status === 'CONSUMED')) {
+        const withheld = fresh.claims
+          .map((claim) => claim.claim)
+          .filter((claim) => !revealClaims.includes(claim));
+        await finish(revealClaims, withheld);
+        return;
+      }
+      if (fresh && !fresh.open) return; // the closed-state notice explains it
+      if (fresh && fresh.status === 'PENDING') {
+        // Re-read confirms it: still unanswered, so nothing left the phone.
+        setFailure({
+          kind: 'unavailable',
+          message: `${caught.message} Nothing was shared — the request is still open.`,
+        });
+        return;
+      }
+    }
+
+    setFailure({
+      kind: 'error',
+      message: `${caught.message}${uncertain ? '' : ' Nothing was shared.'}`,
+    });
+  };
+
   const decline = async () => {
     setBusy('decline');
     setError(null);
+    setFailure(null);
     try {
       await passportService.decline(requestId);
       // `refused`, not `destroy`: declining is saying no, not destroying anything. The heavy
@@ -141,9 +238,14 @@ export function DiscloseScreen({ requestId }: { requestId: string }) {
       haptic.refused();
       router.back();
     } catch (caught) {
-      setError(
-        caught instanceof ApiError ? caught.message : 'Could not decline this request.',
-      );
+      // A request that closed underneath the holder needs no "decline" — show why it closed.
+      if (caught instanceof ApiError && caught.status === 410) {
+        await load();
+      } else {
+        setError(
+          caught instanceof ApiError ? caught.message : 'Could not decline this request.',
+        );
+      }
       setBusy(null);
     }
   };
@@ -161,53 +263,62 @@ export function DiscloseScreen({ requestId }: { requestId: string }) {
     return (
       <Screen>
         <Header title="Verification request" />
-        <Notice tone="error">{error ?? 'This request could not be found.'}</Notice>
+        <Notice tone="error" action="Try again" onAction={() => void load()}>
+          {error ?? 'This request could not be found.'}
+        </Notice>
       </Screen>
     );
   }
 
+  const verifierName = profile?.name ?? request.verifier;
+
   // ── the receipt ──────────────────────────────────────────────────────────
   if (done) {
+    const receipt = done.receipt;
     return (
-      <Screen footer={<Button label="Done" onPress={() => router.back()} />}>
+      <Screen
+        footer={
+          <View style={styles.footer}>
+            {receipt ? (
+              <Button
+                label="View consent receipt"
+                variant="secondary"
+                icon="receipt"
+                onPress={() => router.replace(ROUTES.PASSPORT.SHARE(receipt.id))}
+              />
+            ) : null}
+            <Button label="Done" onPress={() => router.back()} />
+          </View>
+        }
+      >
         <Header title="Shared" />
         <View style={styles.sheet}>
-          <Notice tone="cleared" title={`${request.verifier} has your answer`}>
+          <Notice tone="cleared" title={`${verifierName} has your answer`}>
             They can verify it came from Pravaah and belongs to this device, and they can
             see nothing beyond what you ticked.
           </Notice>
 
-          <Panel>
-            <Legend>Shared</Legend>
-            {done.shared.length === 0 ? (
-              <Text role="bodySm" tone="dim">
-                Nothing — you proved only that you hold a live Pravaah passport.
-              </Text>
-            ) : (
-              done.shared.map((claim) => (
-                <View key={claim} style={styles.receiptRow}>
-                  <Icon name="check" size={14} color={p.cleared} weight={1.8} />
-                  <Text role="bodySm">{labelFor(request.claims, claim)}</Text>
-                </View>
-              ))
-            )}
-          </Panel>
+          <DisclosureList
+            shared={done.shared.map((claim) => ({
+              claim,
+              label: labelFor(request.claims, claim),
+            }))}
+            questions={receipt?.predicatesAnswered ?? []}
+            withheld={done.withheld.map((claim) => ({
+              claim,
+              label: labelFor(request.claims, claim),
+            }))}
+          />
 
-          {done.withheld.length > 0 ? (
-            <Panel tone="sunk">
-              <Legend>Kept private</Legend>
-              {done.withheld.map((claim) => (
-                <View key={claim} style={styles.receiptRow}>
-                  <Icon name="dash" size={14} color={p.inkFaint} weight={1.8} />
-                  <Text role="bodySm" tone="dim">
-                    {labelFor(request.claims, claim)}
-                  </Text>
-                </View>
-              ))}
-              <Micro>
-                They were told you declined these, not that the answer was no.
+          {institution ? (
+            <View style={[styles.fine, { borderTopColor: p.rule }]}>
+              <Icon name="receipt" size={13} color={p.inkFaint} weight={1.3} />
+              <Micro style={styles.fineText}>
+                {receipt
+                  ? `A consent receipt is saved in “Shared with organisations”. ${verifierName} may keep this until ${formatDate(receipt.deletesOn)}, and you can withdraw it there at any time.`
+                  : `Your consent receipt will appear in “Shared with organisations” shortly. You can withdraw this share there at any time.`}
               </Micro>
-            </Panel>
+            </View>
           ) : null}
         </View>
       </Screen>
@@ -215,12 +326,13 @@ export function DiscloseScreen({ requestId }: { requestId: string }) {
   }
 
   // ── the ask ──────────────────────────────────────────────────────────────
-  const expired = !request.open;
+  const closed = !request.open;
+  const closedCopy = closedNotice(request, verifierName);
 
   return (
     <Screen
       footer={
-        expired ? (
+        closed ? (
           <Button label="Close" onPress={() => router.back()} />
         ) : (
           <View style={styles.footer}>
@@ -236,7 +348,7 @@ export function DiscloseScreen({ requestId }: { requestId: string }) {
                   : `${request.requester ? 'Approve' : 'Share'} ${selected.size} ${selected.size === 1 ? 'detail' : 'details'}`
               }
               loading={busy === 'share'}
-              disabled={busy !== null || !request.credentialId}
+              disabled={busy !== null || !request.credentialId || failure?.kind === 'stopped'}
               onPress={() => void share()}
               hint="Your device signs this share. It cannot be reused by anyone else or at any other verifier."
             />
@@ -256,16 +368,17 @@ export function DiscloseScreen({ requestId }: { requestId: string }) {
       <View style={styles.sheet}>
         {error ? <Notice tone="error">{error}</Notice> : null}
 
-        {expired ? (
-          <Notice tone="caution" title="This request has closed">
-            Ask {request.verifier} to start a new one. Requests expire quickly on purpose —
-            an open challenge is a window somebody else could use.
+        {failure ? <FailureNotice failure={failure} onRetry={() => void share()} /> : null}
+
+        {closedCopy ? (
+          <Notice tone="caution" title={closedCopy.title}>
+            {closedCopy.body}
           </Notice>
         ) : null}
 
-        {!request.credentialId ? (
+        {!request.credentialId && !closed ? (
           <Notice tone="caution" title="You have no live passport">
-            Issue your passport first, then ask {request.verifier} to try again.
+            Issue your passport first, then ask {verifierName} to try again.
           </Notice>
         ) : null}
 
@@ -316,6 +429,27 @@ export function DiscloseScreen({ requestId }: { requestId: string }) {
                 {request.purpose}
               </Text>
             </>
+          ) : profile ? (
+            /*
+              A registered ORGANISATION, as PRAVAAH vetted it (M7). The verified domain and the
+              retention promise are shown BEFORE the claim list, because they are what the
+              holder should check against the letter or website in front of them — a
+              lookalike can copy a name, not the domain an admin approved.
+            */
+            <View style={styles.org}>
+              <Counterparty
+                name={profile.name}
+                domain={profile.domain}
+                type={profile.type}
+                country={profile.country}
+                approved={profile.approved}
+                trustLevel={profile.trustLevel}
+                retentionDays={profile.retentionDays}
+              />
+              <Text role="bodySm" style={styles.purpose}>
+                {request.purpose}
+              </Text>
+            </View>
           ) : (
             <>
               <Text role="title">{request.verifier}</Text>
@@ -341,7 +475,7 @@ export function DiscloseScreen({ requestId }: { requestId: string }) {
               key={claim.claim}
               claim={claim}
               checked={selected.has(claim.claim)}
-              disabled={expired || busy !== null}
+              disabled={closed || busy !== null}
               onToggle={() => toggle(claim.claim)}
             />
           ))}
@@ -367,9 +501,9 @@ export function DiscloseScreen({ requestId }: { requestId: string }) {
         <View style={[styles.fine, { borderTopColor: p.rule }]}>
           <Icon name="lock" size={13} color={p.inkFaint} weight={1.3} />
           <Micro style={styles.fineText}>
-            Anything you do not tick stays mathematically hidden — {request.verifier} receives
-            a one-way fingerprint of it, not the value. This share is signed for them alone
-            and expires, so it cannot be replayed anywhere else.
+            Anything you do not tick stays mathematically hidden — {verifierName} receives a
+            one-way fingerprint of it, not the value. This share is signed for them alone and
+            expires, so it cannot be replayed anywhere else.
           </Micro>
         </View>
       </View>
@@ -378,11 +512,70 @@ export function DiscloseScreen({ requestId }: { requestId: string }) {
 }
 
 /**
+ * Why a request can no longer be answered — each cause worded as what actually happened.
+ * Null while the request is open.
+ */
+function closedNotice(
+  request: VerifierRequestDetail,
+  verifierName: string,
+): { title: string; body: string } | null {
+  if (request.verifierProfile && !request.verifierProfile.approved) {
+    return {
+      title: 'This organisation can no longer ask',
+      body: `Pravaah has suspended ${verifierName}, so this request cannot be answered and nothing will be shared with them.`,
+    };
+  }
+  if (request.open) return null;
+  switch (request.status) {
+    case 'CANCELLED':
+      return {
+        title: `${verifierName} cancelled this request`,
+        body: 'Nothing was shared. If you still need to prove your reputation to them, ask them to start again.',
+      };
+    case 'DECLINED':
+      return { title: 'You declined this request', body: 'Nothing was shared.' };
+    case 'APPROVED':
+    case 'CONSUMED':
+      return {
+        title: 'You already answered this request',
+        body: 'What you shared is in your history. A request can only be answered once.',
+      };
+    default:
+      return {
+        title: 'This request has closed',
+        body: `Ask ${verifierName} to start a new one. Requests expire quickly on purpose — an open challenge is a window somebody else could use.`,
+      };
+  }
+}
+
+function FailureNotice({ failure, onRetry }: { failure: ShareFailure; onRetry: () => void }) {
+  if (failure.kind === 'stopped') {
+    return (
+      <Notice tone="error" title="This share was stopped">
+        {failure.message}
+        {failure.reasons.length ? `\n\n${failure.reasons.map((r) => `• ${r}`).join('\n')}` : ''}
+        {'\n\nIf this was not you, revoke your passport from the wallet.'}
+      </Notice>
+    );
+  }
+  if (failure.kind === 'unavailable') {
+    return (
+      <Notice tone="caution" title="Nothing was shared" action="Try again" onAction={onRetry}>
+        {failure.message}
+      </Notice>
+    );
+  }
+  return <Notice tone="error">{failure.message}</Notice>;
+}
+
+/**
  * One claim, as a decision rather than a field name.
  *
  * `whyAsked` sits under the label because it is the only thing that makes a tick
  * meaningful, and HIGH-sensitivity claims are marked so the eye reaches them first — a
  * passport number and a "Good or better" boolean should not read as equivalent asks.
+ * Yes/no claims are marked too, from the other side: the most reassuring fact about them
+ * is how little they reveal.
  */
 function ClaimChoice({
   claim,
@@ -397,6 +590,7 @@ function ClaimChoice({
 }) {
   const p = usePalette();
   const sensitive = claim.sensitivity === 'HIGH';
+  const yesNo = isYesNoClaim(claim.claim);
 
   return (
     <View
@@ -411,7 +605,7 @@ function ClaimChoice({
       <Checkbox
         checked={checked}
         onChange={disabled ? () => undefined : onToggle}
-        label={`${claim.label}. ${claim.detail} ${claim.whyAsked}`}
+        label={`${claim.label}. ${yesNo ? 'A yes or no answer only. ' : ''}${claim.detail} ${claim.whyAsked}`}
       >
         <View style={styles.claimText}>
           <View style={styles.claimHead}>
@@ -420,9 +614,17 @@ function ClaimChoice({
               <Micro tone="carmine" style={styles.flag}>
                 Sensitive
               </Micro>
+            ) : yesNo ? (
+              <Micro tone="latent" style={styles.flag}>
+                Yes / no
+              </Micro>
             ) : null}
           </View>
-          <Micro tone="dim">{claim.detail}</Micro>
+          <Micro tone="dim">
+            {yesNo
+              ? 'They learn only yes or no — never your score, never your band.'
+              : claim.detail}
+          </Micro>
           <Micro>{claim.whyAsked}</Micro>
         </View>
       </Checkbox>
@@ -445,6 +647,7 @@ function labelFor(claims: ClaimDescriptor[], claim: string): string {
 const styles = StyleSheet.create({
   sheet: { gap: Space.xxl, paddingTop: Space.sm },
   purpose: { marginTop: Space.xs },
+  org: { gap: Space.xs, marginTop: Space.sm },
   asker: { flexDirection: 'row', alignItems: 'flex-start', gap: Space.md },
   askerText: { flex: 1, gap: 1 },
   claims: { gap: Space.sm },
@@ -467,12 +670,6 @@ const styles = StyleSheet.create({
     paddingVertical: Space.md,
   },
   absentText: { flex: 1, gap: 1 },
-  receiptRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Space.sm,
-    marginTop: Space.xs,
-  },
   footer: { gap: Space.sm },
   fine: {
     flexDirection: 'row',

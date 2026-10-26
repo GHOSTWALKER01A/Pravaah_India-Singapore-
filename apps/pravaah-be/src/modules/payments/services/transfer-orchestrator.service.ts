@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common'
 
@@ -24,6 +25,7 @@ import {
   corridorFor,
   hasFundsInSuspense,
   hasStatusCheckBudget,
+  isDrivenByTransferSaga,
   isSettled,
   nextPollAt,
   railFor,
@@ -736,6 +738,15 @@ export class TransferOrchestratorService {
    */
   async drive(transactionId: string): Promise<Transaction> {
     let transaction = await this.load(transactionId)
+
+    // A hard refusal, not a skip: a caller handing M5's money to the transfer saga is
+    // a wiring bug, and quietly returning the row would hide it. See
+    // EXTERNALLY_DRIVEN_TYPES for what this saga would do to a premium otherwise.
+    if (!isDrivenByTransferSaga(transaction.type)) {
+      throw new InternalServerErrorException(
+        `${transaction.type} transactions are settled by the insurance module, not the transfer saga`,
+      )
+    }
 
     if (transaction.status === TxnStatus.VALIDATED) {
       transaction = await this.reserve(transaction)

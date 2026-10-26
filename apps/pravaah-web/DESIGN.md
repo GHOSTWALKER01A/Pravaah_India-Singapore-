@@ -7,7 +7,8 @@
 **Security engraving — the face of a banknote.**
 
 A banknote is state-issued trust made portable and carried by the bearer. That is MyPravaah's
-mechanism exactly: a credential whose value travels with the person holding it. The note's
+mechanism exactly: a reputation receipt whose value travels with the person holding it, from
+one lender to the next. The note's
 own anti-forgery vocabulary maps one-to-one onto the product, which is why this world is
 functional rather than decorative:
 
@@ -17,8 +18,8 @@ functional rather than decorative:
 | Latent image (tilt to reveal) | The score, revealed only to the holder |
 | Microtext | The audit trail under the surface |
 | Security thread | The chain of trust running unbroken through every module |
-| Multi-language panel | The cross-border, multi-lingual holder |
-| Serial number | The credential's identity |
+| Multi-language panel | The vernacular holder — Hindi first, by voice |
+| Serial number | The receipt's identity |
 | Second-colour counters | The value, stated where it must not be missed |
 
 The refused defaults, named so they stay refused: the navy-gradient fintech landing page with
@@ -92,8 +93,8 @@ is not any more: the seal does that job of saying "you are in the right place" b
 nine-pixel gloss competing with the name above it.
 
 Ordered numbering is earned only where the order carries information the reader needs — the
-M0→M7 chain (each step is impossible without the previous one) and the per-corridor KYC
-sequence. Nowhere else.
+M0→M7 chain (each step is impossible without the previous one) and the six-check KYC sequence.
+Nowhere else.
 
 ## Motion
 
@@ -121,8 +122,15 @@ Two rules the moment depends on, both of which it silently lost once:
   decoration laid over a section that has not earned it.
 - Every factual claim traces to something the system does. Unverified specifics ship as
   visibly marked placeholders, never as confident prose.
-- The product's stage is rendered from `STAGE`, never written into a page's prose, and both
-  halves of it always appear together: eight modules built, no licence held. See PRODUCT.md.
+- The product's stage is rendered from `STAGE`, never written into a page's prose, and every
+  part of it always appears together: eight modules built, the copilot in build, no licence
+  held. See PRODUCT.md.
+- "In build" is struck hollow in the second colour, so a reader can find the rows that do not
+  run yet at a glance. It appears only on /what-is-built, under its own rule after the built
+  ledger.
+- The home page is six sections — Face, Problem, CaptureColumn, Holds, Chain, Close — and the
+  composition is the product. Do not insert a new section into it; new facts go into the copy
+  and data of the existing ones.
 - A status badge that reads the same on every row is either the argument or it is noise.
   Keep it when the uniformity is the point (the chain: a reader expects roadmap and finds
   none); remove it when it is not (the security ledger, where it was eight identical marks

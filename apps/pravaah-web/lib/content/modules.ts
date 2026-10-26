@@ -32,13 +32,13 @@ export const SURFACES: readonly Surface[] = [
     name: "Holder app",
     role: "The person who owns the reputation",
     detail:
-      "An Expo app carrying the whole holder journey: verification, the consent screens, the score with its reasons, the credential wallet, payments, cover, and a security section showing every decision the system has made about you.",
+      "An Expo app carrying the whole holder journey: verification, the consent screens, the score with its reasons, the receipt wallet, payments, cover, and a security section showing every decision the system has made about you. It is where the copilot's conversation will live.",
     holds: [
-      "Verification, step by step, per corridor",
+      "Verification, step by step",
       "Consent — grant, view, revoke",
       "Score, factors and ranked improvements",
-      "Credential wallet, share history, revoke",
-      "Scan and check another person's passport",
+      "Receipt wallet, share history, revoke",
+      "Partner requests, approved claim by claim",
       "Wallet, payees, QR, autopay, statement, disputes",
       "Quotes, policies, claims with documents",
       "Registered devices and a security activity log",
@@ -53,7 +53,8 @@ export const SURFACES: readonly Surface[] = [
       "Identity check orchestration and manual-review queue",
       "Consent lifecycle, encrypted fetch, data-life deletion",
       "Feature normalisation and the scoring model registry",
-      "SD-JWT credential issuance, status list, verification",
+      "SD-JWT receipt issuance, status list, verification",
+      "Partner API — request, verify, record a decision",
       "Ledger, limits, quotes, rail reconciliation",
       "Underwriting, policy lifecycle, claims adjudication",
       "Risk scoring, device trust, case management",
@@ -63,12 +64,12 @@ export const SURFACES: readonly Surface[] = [
     name: "Staff console",
     role: "The humans the system deliberately keeps in the loop",
     detail:
-      "A Next.js console for the decisions that must not be automated: a name that nearly matches, a payment held for review, a claim that needs a person, a credential to suspend. It is where the product's refusal to auto-reject becomes an actual queue with an actual clock.",
+      "A Next.js console for the decisions that must not be automated: a name that nearly matches, a payment held for review, a claim that needs a person, a receipt to suspend, a partner to approve. It is where the product's refusal to auto-reject becomes an actual queue with an actual clock.",
     holds: [
       "Identity review queue",
       "Consent audit",
       "Model registry with a fairness gate, and issued-score audit",
-      "Credential oversight, issuer keys, registered verifiers",
+      "Receipt oversight, issuer keys, panel partner approval",
       "Ledger reconciliation, stuck payments, disputes",
       "Insurance book, claim queue, policies, products",
       "Fraud case queue, assessments, lists",
@@ -97,23 +98,23 @@ export const BUILD_FACTS: ReadonlyArray<{
 }> = [
   {
     label: "Modules complete",
-    value: "8 of 8",
-    from: "Identity, consent, score, passport, payments, insurance, fraud, verification.",
+    value: "8 of 9",
+    from: "Identity, consent, score, receipt, payments, insurance, fraud, panel verification. The ninth, the copilot, is in build.",
   },
   {
     label: "Backend tests",
-    value: "591 passing",
-    from: "24 suites, all green. Run npm test in apps/pravaah-be.",
+    value: "719 passing",
+    from: "30 suites, all green. Run npm test in apps/pravaah-be.",
   },
   {
     label: "Database models",
-    value: "61",
+    value: "70",
     from: "Count the model declarations in prisma/schema.prisma.",
   },
   {
-    label: "Corridor",
-    value: "IND ⟷ SGP",
-    from: "Each side has its own identity sequence, purpose codes and limit buckets.",
+    label: "Market",
+    value: "India",
+    from: "Decentro for KYC and UPI, Setu for the Account Aggregator — each behind a provider interface.",
   },
 ];
 
@@ -139,17 +140,17 @@ export interface Evidence {
 export const EVIDENCE: readonly Evidence[] = [
   {
     title: "The whole suite passes",
-    body: "591 tests across 24 suites, all green. They cover the state machines rather than the rendering: which transitions are legal, what a concurrent settlement does, whether a two-person household sharing a tablet is mistaken for a device farm.",
+    body: "719 tests across 30 suites, all green. They cover the state machines rather than the rendering: which transitions are legal, what a concurrent settlement does, whether a two-person household sharing a tablet is mistaken for a device farm.",
     command: "apps/pravaah-be $ npm test",
   },
   {
-    title: "A credential is issued, presented, verified and revoked",
+    title: "A receipt is issued, presented, verified and revoked",
     body: "One script drives the full lifecycle against the real database: issue, present with selective disclosure, verify the issuer signature and the holder's proof of possession, then revoke and confirm that verification now fails. Nothing in it is a fixture.",
     command: "apps/pravaah-be $ npm run verify:passport",
   },
   {
     title: "One person checking another leaks nothing early",
-    body: "A second script boots the real service and runs the person-to-person handshake end to end — A scans B's card, B approves a subset, A collects. The holder's device keypair is generated inside the script and never leaves it, so the proof of possession is genuine. It pins the properties that make the exchange safe, including that the scan response carries no fact about the holder before approval.",
+    body: "A second script boots the real service and runs the person-to-person handshake end to end — A scans B's receipt card, B approves a subset, A collects. The holder's device keypair is generated inside the script and never leaves it, so the proof of possession is genuine. It pins the properties that make the exchange safe, including that the scan response carries no fact about the holder before approval.",
     command: "apps/pravaah-be $ npx tsx scripts/verify-peer-check.ts",
   },
   {
@@ -207,7 +208,7 @@ export const DECISIONS: readonly Decision[] = [
   {
     module: "M0",
     title: "A near-miss name goes to a person, not to a rejection",
-    body: "Names transliterate badly across scripts, and initials, ordering and spelling legitimately vary between a PAN, a bank record and a passport. Auto-rejecting a partial mismatch would fail hardest for exactly the population this product exists for, so it routes to a review queue instead — which means the console is part of the product rather than an internal tool.",
+    body: "Names transliterate badly across scripts, and initials, ordering and spelling legitimately vary between a PAN, an Aadhaar record and a bank account. Auto-rejecting a partial mismatch would fail hardest for exactly the population this product exists for, so it routes to a review queue instead — which means the console is part of the product rather than an internal tool.",
   },
   {
     module: "M1",
@@ -232,17 +233,17 @@ export const DECISIONS: readonly Decision[] = [
   {
     module: "M3",
     title: "Every score threshold is minted, true and false alike",
-    body: "A credential that only carried the thresholds a holder passes would leak their band through the number of hidden claims. So all of them are present and the disclosure set is uniform, which is the difference between selective disclosure and selective disclosure that works.",
+    body: "A receipt that only carried the thresholds a holder passes would leak their band through the number of hidden claims. So all of them are present and the disclosure set is uniform, which is the difference between selective disclosure and selective disclosure that works.",
   },
   {
     module: "M3",
     title: "Withheld claims are shown as withheld",
-    body: "A verifier who asked for something and did not receive it is told so explicitly, rather than being left to read absence as a negative answer. A holder who declines a claim should not be silently answering 'no' on their own behalf.",
+    body: "A partner who asked for something and did not receive it is told so explicitly, rather than being left to read absence as a negative answer. A holder who declines a claim should not be silently answering 'no' on their own behalf.",
   },
   {
     module: "M3",
     title: "The signature format is the interoperable one, not the convenient one",
-    body: "Node's default signature encoding verifies perfectly against our own code and is rejected by every conformant wallet — a bug that would pass every internal test and fail in front of the first real verifier. The issuer emits the standard form, and the trust anchor is served where the identifier says it is, so the credential is verifiable by parties who have never heard of us.",
+    body: "Node's default signature encoding verifies perfectly against our own code and is rejected by every conformant wallet — a bug that would pass every internal test and fail in front of the first real verifier. The issuer emits the standard form, and the trust anchor is served where the identifier says it is, so the receipt is verifiable by parties who have never heard of us.",
   },
   {
     module: "M4",
@@ -256,8 +257,8 @@ export const DECISIONS: readonly Decision[] = [
   },
   {
     module: "M4",
-    title: "Daily limits are bucketed in local time",
-    body: "A UTC day rolls over at half past five in the morning in India, which would hand a user two days of transfer limit inside one Indian day. Buckets are computed in IST and SGT, and the annual cap follows the Indian financial year rather than the calendar.",
+    title: "Daily limits are bucketed in Indian time",
+    body: "A UTC day rolls over at half past five in the morning in India, which would hand a user two days of transfer limit inside one Indian day. Buckets are computed in IST, and the annual cap follows the Indian financial year rather than the calendar.",
   },
   {
     module: "M5",
@@ -287,12 +288,12 @@ export const DECISIONS: readonly Decision[] = [
   {
     module: "M7",
     title: "A scan learns nothing until the holder approves",
-    body: "Scanning a passport code returns a request identifier and the claims being asked for — and nothing at all about the holder, not even confirmation that the code belonged to anyone. An unrecognised code returns the same answer as a non-MyPravaah one, so the code space cannot be walked to discover which passports exist.",
+    body: "Scanning a receipt code returns a request identifier and the claims being asked for — and nothing at all about the holder, not even confirmation that the code belonged to anyone. An unrecognised code returns the same answer as a non-MyPravaah one, so the code space cannot be walked to discover which receipts exist.",
   },
   {
     module: "M7",
     title: "A person asking is not allowed to name themselves",
-    body: "When one person checks another's passport, the requester's name comes from their own verified identity or is absent. A self-declared display name on a consent screen would be a free impersonation tool: 'approve — asked by someone you trust'.",
+    body: "When one person checks another's receipt, the requester's name comes from their own verified identity or is absent. A self-declared display name on a consent screen would be a free impersonation tool: 'approve — asked by someone you trust'.",
   },
 ];
 
@@ -308,6 +309,14 @@ export const DECISIONS: readonly Decision[] = [
  * stating it is the only way a visitor can hold us to it.
  */
 export const REFUSALS: ReadonlyArray<{ title: string; body: string }> = [
+  {
+    title: "We do not lend, and we do not underwrite",
+    body: "Banks, NBFCs and insurers on the panel carry the capital and the risk, and they make the decision. What MyPravaah adds is the evidence behind it and the reasons in front of you. A product that blurred that line would be claiming a licence it does not hold.",
+  },
+  {
+    title: "No approval, limit or price written by a language model",
+    body: "The copilot being built chooses which tool to call and explains what came back. Approvals and limits come from the scoring model and the partner's own rules, and prices from the pricing engine — each deterministic, and each score recorded with the model version that produced it. The copilot can only render what those returned, so it has no approval of its own to hallucinate.",
+  },
   {
     title: "No bank credentials, ever, as a fallback or otherwise",
     body: "There is no field for a bank password anywhere in the product, and screen-scraping is not an implementation that exists to be switched on when the aggregator rail is unavailable. Anyone asking you for banking credentials on our behalf is not us.",

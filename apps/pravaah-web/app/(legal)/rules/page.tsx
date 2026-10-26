@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import type { ReactElement } from "react";
 
+import { STAGE } from "@/lib/config/site";
 import { ROUTES } from "@/lib/constants/routes";
 import { pageMetadata } from "@/lib/seo";
 import { DocumentShell } from "@/ui/layout/DocumentShell";
@@ -9,7 +10,7 @@ import { DocumentShell } from "@/ui/layout/DocumentShell";
 export const metadata: Metadata = pageMetadata({
   title: "Rules",
   description:
-    "The plain-English rules of MyPravaah: who can apply, what is required on each corridor, what happens when a check fails, how long data lives, and what you can always do.",
+    "The plain-English rules of MyPravaah: who can apply, what is required, what happens when a check fails, how long data lives, who decides, and what you can always do.",
   path: ROUTES.LEGAL.RULES,
 });
 
@@ -31,12 +32,12 @@ export default function RulesPage(): ReactElement {
       <ul>
         <li>You must be 18 or older.</li>
         <li>
-          You must be verifiable on at least one side of the
-          India&ndash;Singapore corridor: Indian identity documents and an Indian
-          bank account, or a Singpass account. Both is stronger than either.
+          You must be verifiable in India: a PAN, an Aadhaar record you can
+          release through DigiLocker, and an Indian bank account in your own
+          name.
         </li>
         <li>
-          You must apply for yourself. A MyPravaah passport is a statement about
+          You must apply for yourself. A MyPravaah receipt is a statement about
           one person, and it cannot be created on someone else&rsquo;s behalf.
         </li>
         <li>
@@ -54,12 +55,10 @@ export default function RulesPage(): ReactElement {
         is no way to skip it.
       </p>
 
-      <h2>Rule 2 — The checks differ by corridor, and the order is fixed</h2>
+      <h2>Rule 2 — Six checks, and the order is fixed</h2>
       <p>
-        India requires six checks: PAN, Aadhaar offline KYC via DigiLocker, a
+        Verification is six checks: PAN, Aadhaar offline KYC via DigiLocker, a
         bank penny-drop, liveness, face match, and sanctions screening.
-        Singapore requires four: Singpass Myinfo, liveness, face match, and
-        sanctions screening. Applying on both sides means seven.
       </p>
       <p>
         You move through them in order. A check that has not cleared keeps you on
@@ -71,7 +70,8 @@ export default function RulesPage(): ReactElement {
       <h2>Rule 3 — A near-miss goes to a person, not to a rejection</h2>
       <p>
         Names transliterate badly between scripts, and initials, ordering and
-        spelling legitimately differ between a PAN, a bank record and a passport.
+        spelling legitimately differ between a PAN, an Aadhaar record and a
+        bank account.
         A partial name mismatch is routed to a human reviewer. It does not
         auto-reject, and you do not have to argue your way past a machine.
       </p>
@@ -146,13 +146,13 @@ export default function RulesPage(): ReactElement {
         product admitting how much it actually knows.
       </p>
 
-      <h2>Rule 9 — You hold the credential, and you disclose claim by claim</h2>
+      <h2>Rule 9 — You hold the receipt, and you disclose claim by claim</h2>
       <p>
-        When the passport is issued, it is issued to you and bound to a key
-        generated on your own device. You choose who sees it and when, and you
-        choose <em>what</em> they see — each claim individually, not the credential
-        as a block. Anything you withhold is reported to the verifier as withheld
-        rather than read as a negative answer.
+        When your reputation receipt is issued, it is issued to you and bound to
+        a key generated on your own device. You choose who sees it and when, and
+        you choose <em>what</em> they see — each claim individually, not the
+        receipt as a block. Anything you withhold is reported to the partner as
+        withheld rather than read as a negative answer.
       </p>
       <p>
         We do not operate a directory that lets institutions look you up without
@@ -161,7 +161,7 @@ export default function RulesPage(): ReactElement {
         wallet.
       </p>
       <p>
-        You can revoke the passport itself. That is stronger than revoking a
+        You can revoke the receipt itself. That is stronger than revoking a
         consent: it stops verifying for everyone, everywhere, immediately —
         including for anyone already holding a copy.
       </p>
@@ -185,8 +185,8 @@ export default function RulesPage(): ReactElement {
       <h2>Rule 11 — What you were quoted is what settles</h2>
       <p>
         Every transfer is priced before you confirm it, and that price is frozen
-        and single-use. The rate and fee you agreed to are read back at settlement
-        rather than recalculated, so the amount that arrives is the amount you were
+        and single-use. The fee you agreed to is read back at settlement rather
+        than recalculated, so the amount that arrives is the amount you were
         shown.
       </p>
       <p>
@@ -220,16 +220,30 @@ export default function RulesPage(): ReactElement {
         pricing on evidence is that the evidence can be argued with.
       </p>
 
-      <h2>Rule 14 — We do not overstate what is built</h2>
+      <h2>Rule 14 — Partners decide, and we do not lend</h2>
       <p>
-        All eight modules — identity, consent and data, scoring, the issued
-        passport, verification, payments, insurance and the fraud engine — are
-        built and verified end to end. That is the honest statement, and so is
-        this one: <strong>none of it is a live financial service.</strong> MyPravaah
-        holds no licences, so the regulated integrations run against provider
-        sandboxes, no real money has moved, and no insurance policy is in force.
-        The mobile app is not published in any app store; if you find one claiming
-        to be MyPravaah today, it is not ours. Both halves are set out in detail on{" "}
+        MyPravaah is not a lender, an NBFC or an insurer. Banks, NBFCs and
+        insurers on the panel carry the capital and the risk, and they make the
+        decision under their own rules. What we give them is evidence; what we
+        give you is the reasons, and the decision they recorded.
+      </p>
+
+      <h2>Rule 15 — No decision is made by a language model</h2>
+      <p>
+        The AI copilot being built will run the conversation: interpret what
+        you ask, choose which step comes next, and explain the result in your
+        language. It will never decide an approval, a limit or a price, give a
+        reason the scoring model did not produce, quote a term the panel did not
+        return, or promise an outcome. Those come from deterministic systems,
+        each logged, and the copilot can only render what they returned.
+      </p>
+
+      <h2>Rule 16 — We do not overstate what is built</h2>
+      <p>{STAGE.built}</p>
+      <p>{STAGE.building}</p>
+      <p>
+        <strong>None of it is a live financial service.</strong> {STAGE.pending}{" "}
+        {STAGE.release} All of this is set out in detail on{" "}
         <Link href={ROUTES.WHAT_IS_BUILT}>What is built</Link>.
       </p>
 
@@ -238,9 +252,10 @@ export default function RulesPage(): ReactElement {
         <li>See exactly which consents are active and what each one covers.</li>
         <li>Revoke any consent, immediately, without a reason.</li>
         <li>
-          See every check made against your passport and which claims it received.
+          See every check made against your receipt, which claims it received,
+          and what the partner decided.
         </li>
-        <li>Revoke the passport, which stops it verifying for everyone at once.</li>
+        <li>Revoke the receipt, which stops it verifying for everyone at once.</li>
         <li>
           Read every security decision recorded about you, including the ones that
           allowed an action.
@@ -259,7 +274,7 @@ export default function RulesPage(): ReactElement {
         The full legal agreement is in <Link href={ROUTES.LEGAL.TERMS}>Terms</Link>.
         Data handling in detail is in{" "}
         <Link href={ROUTES.LEGAL.PRIVACY}>Privacy</Link>. How the credential
-        resists forgery is in <Link href={ROUTES.SECURITY}>Security</Link>.
+        receipt resists forgery is in <Link href={ROUTES.SECURITY}>Security</Link>.
       </p>
     </DocumentShell>
   );

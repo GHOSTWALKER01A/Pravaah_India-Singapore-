@@ -3,6 +3,7 @@ import type { ReactElement } from "react";
 
 import {
   APP_IS_PUBLISHED,
+  MARKET,
   MOBILE_APP,
   STAGE,
   type AppPlatform,
@@ -30,7 +31,7 @@ import { Legend } from "@/ui/primitives/Legend";
 export const metadata: Metadata = {
   title: "Get the app",
   description:
-    "MyPravaah's mobile app is not yet published. Here is what is built, what is coming, and how to be sure you are looking at the real thing.",
+    "MyPravaah's mobile app is not yet published. Here is what is built, what is in build, and how to be sure you are looking at the real thing.",
   // A redirect surface should not compete with the pages that explain the
   // product, and a pre-launch page has nothing durable to rank for.
   robots: { index: false, follow: true },
@@ -94,9 +95,8 @@ export default async function GetAppPage({
               </p>
 
               <p className="mt-5 text-base leading-relaxed text-reverse-dim sm:text-lg">
-                The product itself is finished — all eight modules, verified end
-                to end. What stands between that and a release is licensing, not
-                engineering.
+                {STAGE.headline} What stands between the built modules and a
+                release is licensing, not engineering.
               </p>
 
               <div className="mt-12 border-t border-reverse/20 pt-9">
@@ -106,7 +106,7 @@ export default async function GetAppPage({
                     value={`${STAGE.modulesBuilt} of ${STAGE.modulesTotal} modules`}
                   />
                   <DataField label="Licences held" value="None" />
-                  <DataField label="Corridor" value="India ⟷ Singapore" />
+                  <DataField label="Market" value={MARKET.name} />
                   <DataField
                     label="Deep link"
                     value={`${MOBILE_APP.deepLinkScheme}://`}

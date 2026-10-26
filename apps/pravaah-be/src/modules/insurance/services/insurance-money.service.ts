@@ -452,6 +452,52 @@ export class InsuranceMoneyService {
     return this.orchestrator.load(transactionId)
   }
 
+  /**
+   * Close a premium transaction that never reached the reserve.
+   *
+   * VALIDATED means nothing has been posted: `reservePremium` debits the wallet and
+   * flips the row to RESERVED in ONE database transaction, so a row still VALIDATED has
+   * moved no money and needs no ledger entry to unwind. `VALIDATED → FAILED` is a legal
+   * edge in M4's saga. The status is re-checked inside the compare-and-swap, so a
+   * collection that reserved this row in the meantime is never overwritten.
+   */
+  async failUnreservedPremium(
+    transactionId: string,
+    reason: string,
+  ): Promise<Transaction> {
+    const transaction = await this.orchestrator.load(transactionId)
+    if (transaction.status !== TxnStatus.VALIDATED) return transaction
+
+    try {
+      await this.prisma.$transaction((tx) =>
+        this.transition(tx, transaction, TxnStatus.FAILED, {
+          failureReason: reason.slice(0, 500),
+          completedAt: new Date(),
+          nextPollAt: null,
+        }),
+      )
+    } catch (error) {
+      // Moved on concurrently (reserved by a live collection). Its new owner decides.
+      if (error instanceof ConflictException) {
+        return this.orchestrator.load(transactionId)
+      }
+      throw error
+    }
+
+    await this.audit.log({
+      actorType: ActorType.SYSTEM,
+      action: 'insurance.premium.unreserved_failed',
+      entity: 'Transaction',
+      entityId: transactionId,
+      metadata: { reason },
+    })
+    this.logger.warn(
+      `[${this.failUnreservedPremium.name}] Closed an orphaned, never-reserved premium`,
+      { transactionId },
+    )
+    return this.orchestrator.load(transactionId)
+  }
+
   // ── claim payout ──────────────────────────────────────────────────────────
   /**
    * Pay an approved claim into the claimant's wallet.

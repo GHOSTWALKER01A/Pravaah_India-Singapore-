@@ -67,6 +67,15 @@ export const STATUS_META: Record<
    */
   BINDING: { label: 'Not finished', tone: 'neutral' },
   SUSPECTED_SWAP: { label: 'Needs verifying', tone: 'latent' },
+
+  /**
+   * M7 consent receipts and verifier requests. `ACTIVE` and `EXPIRED` above already read
+   * right for a receipt. WITHDRAWN is neutral, not carmine: withdrawing is the holder
+   * exercising control, not something going wrong, and red would make the safe action look
+   * like a failure.
+   */
+  WITHDRAWN: { label: 'Withdrawn', tone: 'neutral' },
+  CANCELLED: { label: 'Cancelled', tone: 'neutral' },
 };
 
 export function statusMeta(status: string) {

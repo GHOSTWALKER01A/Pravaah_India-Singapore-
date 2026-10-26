@@ -10,8 +10,9 @@ const config = getDefaultConfig(projectRoot);
 // 1. Watch ONLY the hoisted node_modules, not the whole monorepo.
 //
 //    This app imports nothing from `packages/` or its sibling apps — it needs the
-//    workspace root purely because npm hoists `expo`, `expo-router`,
-//    `react-native` and `@react-navigation/*` up there. Watching the entire
+//    workspace root purely because npm hoists `expo`, `expo-router` and
+//    `react-native` up there. (Since SDK 56 expo-router vendors React Navigation
+//    itself, so there is no `@react-navigation/*` to resolve.) Watching the entire
 //    monorepo instead asked Metro to crawl ~122k files, including several
 //    directories it has no business reading:
 //
@@ -37,13 +38,61 @@ config.resolver.nodeModulesPaths = [
   path.resolve(monorepoRoot, 'node_modules'),
 ];
 
-// 3. Disable hierarchical (walk-up) lookup so EVERY module — including packages
-//    hoisted to the root such as react-native — resolves `react` through the
-//    app-first paths above. Without this, root-hoisted packages find the
-//    admin/web app's react@19.2.x at the root, producing a second React
-//    instance and the runtime "Cannot read property 'useMemoCache' of null"
-//    crash from the React Compiler runtime. This guarantees a single React.
-config.resolver.disableHierarchicalLookup = true;
+// 3. Packages THIS APP installs are singletons; everything else resolves the way
+//    npm laid it out.
+//
+//    The app pins its own copies of a few packages that the monorepo root also
+//    has at a different version — react (root has the admin/web app's 19.2.4),
+//    react-native-screens (root has expo-router's newer one). A root-hoisted
+//    package walking up the tree would find those root copies: two Reacts is the
+//    "Cannot read property 'useMemoCache' of null" crash from the React Compiler
+//    runtime, and a screens JS that does not match the native binary is worse.
+//    So any package present in the app's own node_modules is ALWAYS resolved
+//    from there, whoever imports it.
+//
+//    This replaced `disableHierarchicalLookup = true`, which guaranteed the same
+//    thing by switching off nested lookup for EVERY package — and so silently
+//    ignored every version npm deliberately nested. It crashed the dev client at
+//    boot: expo needs pretty-format@29 (nested at node_modules/expo/node_modules),
+//    Metro took the root's 30.x (hoisted for the backend's Jest), whose ESM
+//    wrapper `build/index.mjs` exports `undefined` under Metro's interop, and
+//    expo's HMR client died on `prettyFormat.default.default` with
+//    "[runtime not ready] Cannot read property 'default' of undefined".
+//    Do NOT go back to the blanket flag.
+const fs = require('fs');
+
+const appNodeModules = path.resolve(projectRoot, 'node_modules');
+const appOwned = new Map();
+
+/** The package a bare specifier names: `react/jsx-runtime` → `react`, `@a/b/c` → `@a/b`. */
+function packageNameOf(moduleName) {
+  if (moduleName.startsWith('.') || path.isAbsolute(moduleName)) return null;
+  const parts = moduleName.split('/');
+  return moduleName.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
+}
+
+function isAppOwned(name) {
+  if (!appOwned.has(name)) {
+    appOwned.set(name, fs.existsSync(path.join(appNodeModules, name, 'package.json')));
+  }
+  return appOwned.get(name);
+}
+
+// Any file at the app root works as the origin: resolution then starts in
+// apps/pravaah-rn/node_modules, so the app's copy wins.
+const appOrigin = path.join(projectRoot, 'package.json');
+
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  const name = packageNameOf(moduleName);
+  if (name && isAppOwned(name) && !context.originModulePath.startsWith(appNodeModules)) {
+    return context.resolveRequest(
+      { ...context, originModulePath: appOrigin },
+      moduleName,
+      platform,
+    );
+  }
+  return context.resolveRequest(context, moduleName, platform);
+};
 
 // 4. Belt and braces: refuse to resolve out of build output or virtualenvs even
 //    if something reaches into them by absolute path. Step 1 keeps them out of

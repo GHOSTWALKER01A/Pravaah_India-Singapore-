@@ -226,7 +226,7 @@ export function DeviceBindingBridge({ enabled }: { enabled: boolean }) {
 
 const styles = StyleSheet.create({
   scrim: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     justifyContent: 'flex-end',
     zIndex: 10,
   },

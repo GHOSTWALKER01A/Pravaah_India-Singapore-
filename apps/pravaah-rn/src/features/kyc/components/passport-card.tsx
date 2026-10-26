@@ -33,12 +33,12 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   Easing,
-  runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
+import { scheduleOnRN } from 'react-native-worklets';
 
 import type { Country, KycProfileStatus } from '@/api';
 import {
@@ -156,8 +156,15 @@ export function PassportCard({
 
   // Under Reduce Motion the latent panel is simply always resolved. The content
   // is never hidden waiting for an interaction the user cannot perform.
+  /*
+   * Shared values are written through `.set()` / read through `.get()` everywhere OUTSIDE an
+   * animated style. Assigning `.value` on a hook's return value is, to the React Compiler, a
+   * mutation of something it must treat as immutable — so it bails out of this whole
+   * component, and a component the compiler skips gets no memoization at all. Reanimated 4
+   * added the accessor pair precisely so shared values survive compilation.
+   */
   useEffect(() => {
-    if (!motionOk) reveal.value = 1;
+    if (!motionOk) reveal.set(1);
   }, [motionOk, reveal]);
 
   useEffect(() => {
@@ -175,28 +182,30 @@ export function PassportCard({
    */
   useEffect(() => {
     if (canTurn) return;
-    turn.value = 0;
+    turn.set(0);
     setFace('recto');
   }, [canTurn, turn]);
 
   const hold = () => {
     if (!hasLatent || !motionOk) return;
     haptic.commit();
-    reveal.value = withTiming(1, {
-      duration: Motion.duration.reveal,
-      easing: Easing.bezier(...Motion.out),
-    });
+    reveal.set(
+      withTiming(1, {
+        duration: Motion.duration.reveal,
+        easing: Easing.bezier(...Motion.out),
+      }),
+    );
   };
 
   const release = () => {
     if (!hasLatent || !motionOk) return;
-    reveal.value = withTiming(0, { duration: Motion.duration.base });
+    reveal.set(withTiming(0, { duration: Motion.duration.base }));
   };
 
   /**
    * Commit the face, on the JS thread.
    *
-   * Shared by the control and the gesture, and `runOnJS`-able because it closes over
+   * Shared by the control and the gesture, and `scheduleOnRN`-able because it closes over
    * nothing but a state setter and the haptic module. The tick fires here rather than at
    * the start of the motion, so it marks the plate having TURNED rather than a finger
    * having moved — a buzz on every aborted half-drag is exactly the noise the haptics
@@ -217,10 +226,10 @@ export function PassportCard({
    */
   const flip = useCallback(() => {
     if (!canTurn) return;
-    const next = turn.value < 0.5 ? 1 : 0;
-    turn.value = motionOk
-      ? withSpring(next, Motion.slide)
-      : withTiming(next, { duration: 0 });
+    const next = turn.get() < 0.5 ? 1 : 0;
+    turn.set(
+      motionOk ? withSpring(next, Motion.slide) : withTiming(next, { duration: 0 }),
+    );
     commit(next === 1 ? 'verso' : 'recto');
   }, [canTurn, commit, motionOk, turn]);
 
@@ -243,36 +252,41 @@ export function PassportCard({
         .activeOffsetX([-14, 14])
         .failOffsetY([-18, 18])
         .onStart((event) => {
-          from.value = turn.value < 0.5 ? 0 : 1;
-          dir.value =
-            from.value === 0
+          const start = turn.get() < 0.5 ? 0 : 1;
+          from.set(start);
+          dir.set(
+            start === 0
               ? event.translationX < 0
                 ? 1
                 : -1
               : event.translationX > 0
                 ? 1
-                : -1;
+                : -1,
+          );
         })
         .onUpdate((event) => {
           if (!motionOk) return;
           const progress = Math.abs(event.translationX) / width;
-          turn.value =
-            from.value === 0 ? Math.min(1, progress) : Math.max(0, 1 - progress);
+          turn.set(
+            from.get() === 0 ? Math.min(1, progress) : Math.max(0, 1 - progress),
+          );
         })
         .onEnd((event) => {
-          const started = from.value;
+          const started = from.get();
           const progress = Math.abs(event.translationX) / width;
           const carried =
             progress > TURN_THRESHOLD || Math.abs(event.velocityX) > TURN_VELOCITY;
           const target = carried ? (started === 0 ? 1 : 0) : started;
 
-          turn.value = motionOk
-            ? withSpring(target, Motion.slide)
-            : withTiming(target, { duration: 0 });
+          turn.set(
+            motionOk
+              ? withSpring(target, Motion.slide)
+              : withTiming(target, { duration: 0 }),
+          );
           // The face is committed at the DECISION, not when the spring lands: the code has
           // to be selectable and the buttons live the instant the plate is on its way over.
           if (target !== started) {
-            runOnJS(commit)(target === 1 ? 'verso' : 'recto');
+            scheduleOnRN(commit, target === 1 ? 'verso' : 'recto');
           }
         }),
     [canTurn, commit, motionOk, width, dir, from, turn],
@@ -535,7 +549,7 @@ const styles = StyleSheet.create({
     // PLATE_MIN_HEIGHT.
     minHeight: PLATE_MIN_HEIGHT,
   },
-  overlay: { ...StyleSheet.absoluteFillObject },
+  overlay: { ...StyleSheet.absoluteFill },
   /**
    * The printed area inside a face.
    *
@@ -546,7 +560,7 @@ const styles = StyleSheet.create({
    * long-press target rather than just its top 200dp.
    */
   body: { flexGrow: 1, padding: Space.xl, gap: Space.lg },
-  sheen: { ...StyleSheet.absoluteFillObject },
+  sheen: { ...StyleSheet.absoluteFill },
   head: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -587,7 +601,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   latentLayer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     justifyContent: 'center',
     paddingHorizontal: Space.md,
   },

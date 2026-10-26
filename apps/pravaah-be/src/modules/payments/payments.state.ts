@@ -12,6 +12,7 @@ import {
   MandateStatus,
   PaymentRail,
   TxnStatus,
+  TxnType,
 } from 'generated/prisma/client'
 
 /**
@@ -116,6 +117,32 @@ export function canTransition(from: TxnStatus, to: TxnStatus): boolean {
 /** The transitions available from a state — for the admin console's action list. */
 export function allowedTransitions(from: TxnStatus): TxnStatus[] {
   return [...(ALLOWED[from] ?? [])]
+}
+
+// ── saga ownership ──────────────────────────────────────────────────────────
+/**
+ * Transaction types whose saga another module owns.
+ *
+ * M5 writes PREMIUM and CLAIM_PAYOUT rows through `createRaw` so they share the
+ * transaction table and the ledger, but it drives them with its OWN steps
+ * (`InsuranceMoneyService.settlePremium` / `settleClaimPayout`) and resumes them
+ * with its OWN sweep (`InsuranceLifecycleService.resumeStuckTransactions`). They are
+ * internal wallet ↔ book moves: no UPI cap applies and no rail is ever asked.
+ *
+ * Running one through M4's transfer saga is wrong at every step. An SGD premium dies
+ * in `limitBasis` ("No INR leg to measure the DOMESTIC cap against") — and is then
+ * re-driven every minute, forever, by `recoverStuckSagas`. An INR premium is worse,
+ * because it SUCCEEDS: it consumes the holder's UPI daily cap for a payment that never
+ * touched UPI, then submits an internal premium to a payment rail.
+ */
+export const EXTERNALLY_DRIVEN_TYPES: readonly TxnType[] = [
+  TxnType.PREMIUM,
+  TxnType.CLAIM_PAYOUT,
+]
+
+/** Whether M4's transfer saga (`TransferOrchestratorService.drive`) may move this row. */
+export function isDrivenByTransferSaga(type: TxnType): boolean {
+  return !EXTERNALLY_DRIVEN_TYPES.includes(type)
 }
 
 // ── derived predicates ──────────────────────────────────────────────────────

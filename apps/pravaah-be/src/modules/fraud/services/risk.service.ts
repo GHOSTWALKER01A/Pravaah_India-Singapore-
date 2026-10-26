@@ -165,6 +165,31 @@ export class RiskService {
     })
   }
 
+  /**
+   * Score a holder approving a share to an M7 partner.
+   *
+   * NOT marked `sensitive`, and that is a deliberate calibration rather than an
+   * oversight: the structural step-up rule would challenge every approval from a
+   * device that is not yet bound, and the wallet's approval flow has no step-up leg
+   * — so "sensitive" would read as "refuse every unbound holder". The holder has
+   * already proven possession of the credential's device key, which is the factor
+   * that matters for a presentation. What this engine adds is the cross-cutting view:
+   * a suspended account, a watchlisted device, and the verification-harvesting
+   * patterns M7 passes in as `domainSignals`. M7 acts on HOLD/BLOCK only.
+   */
+  async scoreVerification(ctx: RiskContext): Promise<RiskOutcome> {
+    return this.evaluate(
+      {
+        ...ctx,
+        subjectType: RiskSubjectType.VERIFICATION,
+        sensitive: false,
+      },
+      // The transaction velocity collector counts money movements; on a data share it
+      // would count nothing and cost a query. M7 supplies its own fan-out signals.
+      { skipVelocity: true },
+    )
+  }
+
   // ── the engine ────────────────────────────────────────────────────────────
   /**
    * Collect, aggregate, decide, persist.

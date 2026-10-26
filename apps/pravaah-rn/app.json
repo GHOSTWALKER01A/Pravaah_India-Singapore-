@@ -22,7 +22,6 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": true,
-      "edgeToEdgeEnabled": true,
       "package": "com.pravaah.app"
     },
     "web": {
@@ -44,21 +43,41 @@
       ],
       "expo-font",
       "expo-web-browser",
-      "expo-notifications",
+      [
+        "expo-notifications",
+        {
+          "color": "#0E3B2E",
+          "defaultChannel": "default"
+        }
+      ],
       [
         "expo-camera",
         {
-          "cameraPermission": "Pravaah uses the camera to capture your selfie for the liveness check, to photograph your ID document for verification, and to scan UPI QR codes when you pay."
+          "cameraPermission": "Pravaah uses the camera to capture your selfie for the liveness check, to photograph your ID document for verification, and to scan UPI QR codes when you pay.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "Pravaah opens your photos only when you choose 'From a photo' while scanning, so it can read a UPI QR code out of a picture you already have. The picture stays on your phone — only the code inside it is checked.",
-          "cameraPermission": "Pravaah uses the camera to scan UPI QR codes when you pay."
+          "photosPermission": "Pravaah opens your photos only when you choose one — to read a UPI QR code out of a picture you already have, or to attach a document to an insurance claim.",
+          "cameraPermission": "Pravaah uses the camera to scan UPI QR codes when you pay.",
+          "microphonePermission": false
         }
       ],
-      "expo-secure-store",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Pravaah uses Face ID to unlock your account and to confirm changes to your payment PIN."
+        }
+      ],
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": "Pravaah uses Face ID to unlock the session it keeps on this phone."
+        }
+      ],
       "./plugins/with-release-network-security",
       "./plugins/with-android-ndk-version"
     ],

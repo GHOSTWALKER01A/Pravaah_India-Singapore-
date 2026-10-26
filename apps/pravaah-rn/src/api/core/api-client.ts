@@ -4,9 +4,23 @@ import { tokenManager } from '@/api/auth/token-manager';
 
 import { ApiResponse } from './api.schema';
 import { ApiError } from './error.types';
+import {
+  sendJson,
+  sendMultipart,
+  TransportError,
+  type TransportResponse,
+} from './transport';
 
 /** A JSON request body — any plain object, including typed request interfaces. */
 type Json = object;
+
+/**
+ * Deadlines. Generous for JSON because a payment call waits on a rail round-trip server-side;
+ * far longer for uploads because a full-resolution photo on 3G is legitimately slow and the
+ * server runs OCR and a tamper check before it answers.
+ */
+const JSON_TIMEOUT_MS = 30_000;
+const UPLOAD_TIMEOUT_MS = 120_000;
 
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -57,26 +71,37 @@ class ApiClient {
     // the refresh path replays these same options, it does not reuse this object.
     Object.assign(headers, options.headers);
 
-    let res: Response;
+    const url = this.buildUrl(path);
+    const method = options.method ?? 'GET';
+
+    let res: TransportResponse;
     try {
-      res = await fetch(this.buildUrl(path), {
-        method: options.method ?? 'GET',
-        headers,
-        body: options.body
-          ? isForm
-            ? (options.body as FormData)
-            : JSON.stringify(options.body)
-          : undefined,
-      });
-    } catch {
+      res = isForm
+        ? // Multipart goes over XHR, never `fetch` — see transport.ts for why.
+          await sendMultipart(url, options.body as FormData, {
+            method,
+            headers,
+            timeoutMs: UPLOAD_TIMEOUT_MS,
+          })
+        : await sendJson(
+            url,
+            options.body ? JSON.stringify(options.body) : undefined,
+            { method, headers, timeoutMs: JSON_TIMEOUT_MS },
+          );
+    } catch (error) {
+      // `status: 0` for BOTH kinds: neither produced an HTTP response, so the request may or
+      // may not have reached the server. `code` tells them apart for anyone who needs to.
+      const timedOut = error instanceof TransportError && error.kind === 'TIMEOUT';
       throw new ApiError({
-        message: `Can't reach the server at ${API_BASE_URL}. Check your connection and EXPO_PUBLIC_API_URL (a phone can't use localhost).`,
+        message: timedOut
+          ? 'The server is taking too long to respond. Check your connection and try again.'
+          : `Can't reach the server at ${API_BASE_URL}. Check your connection and EXPO_PUBLIC_API_URL (a phone can't use localhost).`,
+        code: timedOut ? 'TIMEOUT' : 'NETWORK_ERROR',
         status: 0,
       });
     }
 
-    const payload = (await res.json().catch(() => ({}))) as ApiResponse<T> &
-      Record<string, unknown>;
+    const payload = parseBody<T>(res.text);
 
     if (!res.ok) {
       throw new ApiError({ ...payload, status: res.status });
@@ -151,6 +176,24 @@ class ApiClient {
   }
   delete<T>(path: string, auth = true): Promise<T> {
     return this.request<T>(path, { method: 'DELETE', auth });
+  }
+}
+
+/**
+ * The `{ data }` envelope, or an empty object when the body is not JSON.
+ *
+ * A 204, a gateway's HTML error page, or a proxy's plain-text 502 all have bodies that are not
+ * JSON. Each must become "no payload", never a parse exception: on an error status the caller
+ * still needs the real status code, and a throw here would replace it with a SyntaxError.
+ */
+function parseBody<T>(text: string): ApiResponse<T> & Record<string, unknown> {
+  if (!text) return {} as ApiResponse<T> & Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return (parsed && typeof parsed === 'object' ? parsed : {}) as ApiResponse<T> &
+      Record<string, unknown>;
+  } catch {
+    return {} as ApiResponse<T> & Record<string, unknown>;
   }
 }
 

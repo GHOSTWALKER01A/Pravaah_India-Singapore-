@@ -10,7 +10,7 @@ import { Legend } from "@/ui/primitives/Legend";
  * What the holder ends up holding.
  *
  * The section the site was missing entirely. Everything before this explains a
- * mechanism — the border problem, the aggregator rail — and the reader's next
+ * mechanism — the thin-file problem, the aggregator rail — and the reader's next
  * question is the obvious one nobody was answering: so what do I have at the
  * end of it? Without this, the site described a data pipeline and left the
  * person to infer the product.
@@ -39,37 +39,37 @@ const HOLDINGS: ReadonlyArray<{
   {
     serial: "VER",
     title: "A verified identity you prove once",
-    body: "Four to seven checks depending on your corridor, in one sitting. Nothing is asked of you twice, and being verified grants us nothing on its own.",
+    body: "Six checks, in one sitting. Nothing is asked of you twice, and being verified grants us nothing on its own.",
   },
   {
     serial: "SCR",
-    title: "A score you can argue with",
-    body: "A figure on a 300–900 scale, the band it falls in, an honest confidence interval that widens when your data is thin, the five things moving it most, and the specific changes that would raise it — with the gain each is worth.",
+    title: "An answer with its reasons",
+    body: "A figure on a 300–900 scale, the band it falls in, an honest confidence interval that widens when your data is thin, the five things moving it most, and the specific changes that would raise it — with the gain each is worth. Nobody is refused in silence.",
   },
   {
-    serial: "PSP",
-    title: "A credential in your own wallet",
-    body: "Signed by us, bound to a key on your device, and yours. You choose which claims a verifier sees, one by one. What you withhold is shown to them as withheld rather than read as a no.",
+    serial: "RCP",
+    title: "A reputation receipt in your own wallet",
+    body: "Signed by us, bound to a key on your device, and yours. It expires, and you can revoke it. You choose which claims a lender sees, one by one; what you withhold is shown to them as withheld rather than read as a no. A refusal at one lender becomes a re-application at the next without starting over.",
   },
   {
     serial: "CRD",
-    title: "A card for a counter with no app",
-    body: "A physical passport card with a machine-readable zone, an NFC payload and a verify address. A landlord with a phone and no patience can still check it.",
+    title: "A card for a desk with no integration",
+    body: "A printed receipt card with a machine-readable zone, an NFC payload and a verify address. A branch with a phone and no system can still check it.",
   },
   {
     serial: "LOG",
     title: "A record of everyone who looked",
-    body: "Every check against your passport, the claims that left your wallet, and whether it was an institution or a person who asked. You can revoke the whole credential and it stops verifying for everyone at once.",
+    body: "Every check against your receipt, the claims that left your wallet, who asked, and what the partner decided. You can revoke the whole receipt and it stops verifying for everyone at once.",
   },
   {
     serial: "PAY",
-    title: "A wallet that crosses the corridor",
-    body: "Send within India over UPI or to Singapore over the UPI–PayNow link. A statement that shows ledger lines — the reserve, the fee, the refund — rather than a tidied summary, because that is the document that answers you when a balance is disputed.",
+    title: "A UPI wallet with a real statement",
+    body: "Send and collect over UPI, with payees, QR and autopay. A statement that shows ledger lines — the reserve, the fee, the refund — rather than a tidied summary, because that is the document that answers you when a balance is disputed.",
   },
   {
     serial: "COV",
     title: "Cover priced on your record",
-    body: "Income protection, health top-up, travel accident. A higher rate arrives with the reason and with what would change it. A decline arrives as an answer, not an error.",
+    body: "Small-ticket income protection and a health top-up, explained in a sentence and declined in a tap. A higher rate arrives with the reason and with what would change it. A decline arrives as an answer, not an error.",
   },
   {
     serial: "SEC",
@@ -103,14 +103,14 @@ export function Holds(): ReactElement {
             </p>
           </div>
 
-          {/* The corridor plate. A note states its series and denomination in a
+          {/* The holding plate. A note states its series and denomination in a
               reserved field; this states what the holding actually is. */}
           <aside className="border border-intaglio/25 bg-rag p-7 sm:p-8 notch-lg">
             <Legend className="text-carmine">The holding</Legend>
             <DataFieldGrid className="mt-6 grid-cols-2">
               <DataField tone="rag" label="Issued to" value="The holder" />
               <DataField tone="rag" label="Held by" value="Your device" />
-              <DataField tone="rag" label="Corridor" value="IND ⟷ SGP" />
+              <DataField tone="rag" label="Shown to" value="Panel partners" />
               <DataField tone="rag" label="Scale" value="300 – 900" />
               <DataField tone="rag" label="Disclosure" value="Per claim" />
               <DataField tone="rag" label="Revocation" value="Immediate" />

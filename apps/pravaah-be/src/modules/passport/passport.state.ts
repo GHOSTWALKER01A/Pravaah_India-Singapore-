@@ -243,6 +243,21 @@ export function partitionRequestedClaims(requested: readonly string[]): {
   return { known, unknown }
 }
 
+/**
+ * Requested claims a verifier is NOT approved to ask for.
+ *
+ * Fails closed by construction: an empty scope makes every claim "outside", so a
+ * partner that was never given a scope can request nothing — rather than an empty
+ * list being read as "unrestricted", which is the classic default-allow bug.
+ */
+export function claimsOutsideScope(
+  requested: readonly string[],
+  scope: readonly string[],
+): string[] {
+  const allowed = new Set(scope)
+  return [...new Set(requested)].filter((claim) => !allowed.has(claim))
+}
+
 /** Resolve a template id to its claims + purpose sentence. */
 export function resolveTemplate(id: PresentationTemplateId): {
   claims: DisclosableClaim[]

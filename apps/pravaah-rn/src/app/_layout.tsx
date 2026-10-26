@@ -1,12 +1,22 @@
+/*
+ * The navigation theme comes from `expo-router`, NOT `@react-navigation/native`.
+ *
+ * Since SDK 56 expo-router vendors its own copy of React Navigation instead of depending on
+ * the `@react-navigation/*` packages. Importing `ThemeProvider` from the upstream package
+ * would still type-check if a stale copy were hoisted in node_modules — and would then
+ * provide a theme on a React context the router's navigators never read, so every header
+ * and transition background silently fell back to the default white.
+ */
 import {
   DarkTheme,
   DefaultTheme,
   ThemeProvider as NavThemeProvider,
+  Stack,
   type Theme,
-} from '@react-navigation/native';
-import { Stack } from 'expo-router';
+} from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
+import * as SystemUI from 'expo-system-ui';
 import { useEffect } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -23,13 +33,20 @@ import {
 // Held until the note's own faces are ready. A frame rendered in the system font
 // and then reflowed into Bodoni is a visible jump on the first screen the user
 // ever sees, which is the screen that has to look most trustworthy.
-void SplashScreen.preventAutoHideAsync();
+void SplashScreen.preventAutoHideAsync().catch(() => {
+  /* Already hidden (a fast refresh re-ran this module). Nothing to hold. */
+});
+
+// Cross-fade off the splash instead of cutting. The splash ground and the first screen's
+// ground are the same green, so a fade reads as the note settling rather than a new app
+// replacing it.
+SplashScreen.setOptions({ duration: 250, fade: true });
 
 export default function RootLayout() {
   const fontsReady = useAppFonts();
 
   useEffect(() => {
-    if (fontsReady) void SplashScreen.hideAsync();
+    if (fontsReady) void SplashScreen.hideAsync().catch(() => undefined);
   }, [fontsReady]);
 
   if (!fontsReady) return null;
@@ -76,6 +93,20 @@ function Navigation() {
     },
     fonts: base.fonts,
   };
+
+  /*
+   * The ROOT view's colour, beneath React entirely.
+   *
+   * The navigator theme above paints every screen, but not the native window behind them —
+   * and that window shows through whenever nothing React-drawn covers it: the keyboard
+   * sliding in on Android, a modal's rubber-band overscroll on iOS, the frame between a
+   * screen unmounting and the next mounting. It defaults to white, so in dark mode each of
+   * those moments was a white flash on a green note. Following the scheme keeps it the same
+   * ground as whatever is about to be drawn on top of it.
+   */
+  useEffect(() => {
+    void SystemUI.setBackgroundColorAsync(p.ground).catch(() => undefined);
+  }, [p.ground]);
 
   return (
     <NavThemeProvider value={navTheme}>

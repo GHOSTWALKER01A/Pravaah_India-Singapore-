@@ -321,7 +321,7 @@ const styles = StyleSheet.create({
   dot: { width: 12, height: 12, borderRadius: 6 },
   caret: { width: Hairline.thick + 0.5, height: 24 },
   hiddenInput: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     opacity: 0,
     color: 'transparent',
   },

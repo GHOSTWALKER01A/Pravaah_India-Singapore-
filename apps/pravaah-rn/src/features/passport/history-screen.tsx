@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
+import { router } from 'expo-router';
+
 import { ApiError, passportService } from '@/api';
 import type { ShareRecord } from '@/api';
 import {
+  Button,
   Header,
   Icon,
   Legend,
@@ -14,6 +17,7 @@ import {
   Screen,
   Text,
 } from '@/components/ui';
+import { ROUTES } from '@/constants/routes.constants';
 import { Space, usePalette } from '@/theme';
 
 /**
@@ -75,6 +79,16 @@ export function HistoryScreen() {
             {error}
           </Notice>
         ) : null}
+
+        {/* This log is every EVENT. What an organisation still HOLDS — and the power to
+            withdraw it — lives on the consent receipts, one tap away. */}
+        <Button
+          label="Shared with organisations — manage and withdraw"
+          variant="quiet"
+          inline
+          icon="receipt"
+          onPress={() => router.push(ROUTES.PASSPORT.SHARES)}
+        />
 
         {records.length === 0 ? (
           <Panel tone="sunk">
